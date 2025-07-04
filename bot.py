@@ -16,6 +16,10 @@ from telegram.ext import (
 # Загрузка .env
 load_dotenv()
 
+# Проверка BOT_TOKEN
+if not os.getenv("BOT_TOKEN"):
+    raise ValueError("BOT_TOKEN not found in environment variables. Please set it in .env or PythonAnywhere Environment Variables.")
+
 # Состояния для ConversationHandler
 QUESTION, ANSWER = range(2)
 EDIT_QUESTION, EDIT_FIELD, EDIT_VALUE = range(3)
@@ -40,7 +44,11 @@ def load_users():
     users_str = os.getenv("ALLOWED_USERS", "")
     if not users_str:
         return []
-    return [int(user_id) for user_id in users_str.split(",")]
+    try:
+        return [int(user_id) for user_id in users_str.split(",")]
+    except ValueError:
+        print("Error: ALLOWED_USERS contains invalid user IDs. Expected comma-separated integers.")
+        return []
 
 # Сохранение JSON и синхронизация с GitHub
 def save_guide(data):
@@ -202,7 +210,7 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ConversationHandler.END
 
 # Запуск бота
-def main():
+async def main():
     app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(open_guide, pattern='open_guide'))
@@ -229,7 +237,8 @@ def main():
         fallbacks=[]
     )
     app.add_handler(edit_conv)
-    app.run_polling()
+    await app.run_polling()
 
 if __name__ == '__main__':
-    main()
+    import asyncio
+    asyncio.run(main())
