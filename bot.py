@@ -213,7 +213,7 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # Запуск бота
 async def main():
-    application = await Application.builder().token(os.getenv("BOT_TOKEN")).build()
+    application = Application.builder().token(os.getenv("BOT_TOKEN")).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(open_guide, pattern='open_guide'))
     application.add_handler(CallbackQueryHandler(show_answer, pattern='question_.*'))
