@@ -124,6 +124,8 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Поиск по ключевым словам
 @restrict_access
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('__convo_state'):  # Проверяем, находится ли пользователь в диалоге
+        return  # Игнорируем поиск, если пользователь в состоянии диалога
     keyword = update.message.text.lower()
     guide = load_guide()
     results = [q for q in guide["questions"] if keyword in q["question"].lower() or keyword in q["answer"].lower()]
@@ -138,6 +140,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    context.user_data['__convo_state'] = 'add_point'  # Устанавливаем флаг диалога
     await query.message.reply_text("➕ Введите вопрос (например, 'Ошибка входа в систему'):")
     return QUESTION
 
@@ -156,6 +159,7 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     guide["questions"].append(new_point)
     save_guide(guide)
+    context.user_data.pop('__convo_state', None)  # Удаляем флаг диалога
     await update.message.reply_text(f"➕ Пункт добавлен!\nВопрос: {new_point['question']}")
     return ConversationHandler.END
 
@@ -167,6 +171,7 @@ async def edit_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guide["questions"]:
         await query.message.reply_text("📖 Справочник пуст. Нечего редактировать! ➕")
         return
+    context.user_data['__convo_state'] = 'edit_point'  # Устанавливаем флаг диалога
     keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'edit_question_{q["id"]}')] for q in guide["questions"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.reply_text("✏️ Выберите вопрос для редактирования:", reply_markup=reply_markup)
@@ -193,6 +198,7 @@ async def receive_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
         question_id = context.user_data['edit_question_id']
         guide["questions"] = [q for q in guide["questions"] if q["id"] != question_id]
         save_guide(guide)
+        context.user_data.pop('__convo_state', None)  # Удаляем флаг диалога
         await query.message.reply_text("🗑️ Пункт удалён!")
         return ConversationHandler.END
     field = "вопрос" if query.data == 'edit_field_question' else "ответ"
@@ -208,6 +214,7 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
             q[field] = update.message.text
             break
     save_guide(guide)
+    context.user_data.pop('__convo_state', None)  # Удаляем флаг диалога
     await update.message.reply_text(f"✏️ {field.capitalize()} обновлён!")
     return ConversationHandler.END
 
