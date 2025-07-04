@@ -3,6 +3,7 @@ import os
 import subprocess
 import random
 import asyncio
+import logging
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -14,6 +15,10 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+
+# Настройка логирования
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Загрузка .env
 load_dotenv()
@@ -49,7 +54,7 @@ def load_users():
     try:
         return [int(user_id) for user_id in users_str.split(",")]
     except ValueError:
-        print("Error: ALLOWED_USERS contains invalid user IDs. Expected comma-separated integers.")
+        logger.error("ALLOWED_USERS contains invalid user IDs. Expected comma-separated integers.")
         return []
 
 # Сохранение JSON и синхронизация с GitHub
@@ -62,16 +67,16 @@ def sync_with_github():
     try:
         result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
         if "guide.json" not in result.stdout:
-            print("No changes in guide.json to commit.")
+            logger.info("No changes in guide.json to commit.")
             return
         subprocess.run(["git", "add", "guide.json"], check=True)
         subprocess.run(["git", "commit", "-m", "Update guide.json via bot"], check=True)
         subprocess.run(["git", "push", "origin", "main"], check=True)
-        print("Successfully synced guide.json to GitHub.")
+        logger.info("Successfully synced guide.json to GitHub.")
     except subprocess.CalledProcessError as e:
-        print(f"Git sync error: {e}")
+        logger.error(f"Git sync error: {e}")
     except Exception as e:
-        print(f"Unexpected error during git sync: {e}")
+        logger.error(f"Unexpected error during git sync: {e}")
 
 # Проверка доступа
 def restrict_access(func):
@@ -79,7 +84,11 @@ def restrict_access(func):
         user_id = update.effective_user.id
         users = load_users()
         if user_id not in users:
-            await update.message.reply_text("🚫 Доступ запрещён! Обратитесь к администратору.")
+            if update.message:
+                await update.message.reply_text("🚫 Доступ запрещён! Обратитесь к администратору.")
+            elif update.callback_query:
+                await update.callback_query.message.reply_text("🚫 Доступ запрещён! Обратитесь к администратору.")
+            logger.warning(f"Unauthorized access attempt by user {user_id}")
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
@@ -87,6 +96,7 @@ def restrict_access(func):
 # Команда /start
 @restrict_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"User {update.effective_user.id} started the bot")
     jokes = load_jokes()
     joke = random.choice(jokes["jokes"]) if jokes["jokes"] else "Справочник готов к работе! 😄"
     keyboard = [
@@ -100,6 +110,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Команда /cancel
 @restrict_access
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"User {update.effective_user.id} cancelled the conversation")
     await update.message.reply_text("🚪 Диалог отменён. Напишите /start для возврата в меню.")
     return ConversationHandler.END
 
@@ -108,6 +119,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def open_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    logger.info(f"User {update.effective_user.id} opened the guide")
     guide = load_guide()
     if not guide["questions"]:
         await query.message.reply_text("📖 Справочник пуст. Добавьте первый пункт! ➕")
@@ -124,15 +136,19 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     question_id = int(query.data.split('_')[1])
+    logger.info(f"User {update.effective_user.id} requested answer for question ID {question_id}")
     guide = load_guide()
     question = next((q for q in guide["questions"] if q["id"] == question_id), None)
     if question:
         await query.message.reply_text(f"📄 Вопрос: {question['question']}\nОтвет: {question['answer']}")
+    else:
+        await query.message.reply_text("❌ Вопрос не найден!")
 
 # Поиск по ключевым словам
 @restrict_access
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyword = update.message.text.lower()
+    logger.info(f"User {update.effective_user.id} searched for '{keyword}'")
     guide = load_guide()
     results = [q for q in guide["questions"] if keyword in q["question"].lower() or keyword in q["answer"].lower()]
     if not results:
@@ -147,12 +163,14 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    logger.info(f"User {update.effective_user.id} started adding a new point")
     await query.message.reply_text("➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)")
     return QUESTION
 
 @restrict_access
 async def receive_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['new_question'] = update.message.text
+    logger.info(f"User {update.effective_user.id} entered question: {update.message.text}")
     await update.message.reply_text("Введите подсказку для решения:\n(Напишите /cancel для отмены)")
     return ANSWER
 
@@ -167,6 +185,7 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     guide["questions"].append(new_point)
     save_guide(guide)
+    logger.info(f"User {update.effective_user.id} added new point: {new_point['question']}")
     await update.message.reply_text(f"➕ Пункт добавлен!\nВопрос: {new_point['question']}")
     return ConversationHandler.END
 
@@ -175,6 +194,7 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def edit_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    logger.info(f"User {update.effective_user.id} started editing a point")
     guide = load_guide()
     if not guide["questions"]:
         await query.message.reply_text("📖 Справочник пуст. Нечего редактировать! ➕")
@@ -189,6 +209,7 @@ async def select_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data['edit_question_id'] = int(query.data.split('_')[2])
+    logger.info(f"User {update.effective_user.id} selected question ID {context.user_data['edit_question_id']} for editing")
     keyboard = [
         [InlineKeyboardButton("Изменить вопрос", callback_data='edit_field_question')],
         [InlineKeyboardButton("Изменить ответ", callback_data='edit_field_answer')],
@@ -203,6 +224,7 @@ async def receive_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     context.user_data['edit_field'] = query.data
+    logger.info(f"User {update.effective_user.id} chose to edit field: {query.data}")
     if query.data == 'edit_field_delete':
         guide = load_guide()
         question_id = context.user_data['edit_question_id']
@@ -224,6 +246,7 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
             q[field] = update.message.text
             break
     save_guide(guide)
+    logger.info(f"User {update.effective_user.id} updated {field} for question ID {question_id}")
     await update.message.reply_text(f"✏️ {field.capitalize()} обновлён!")
     return ConversationHandler.END
 
@@ -257,7 +280,7 @@ async def main():
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
-    print("Bot is running...")
+    logger.info("Bot is running...")
     # Keep the bot running until interrupted
     try:
         while True:
