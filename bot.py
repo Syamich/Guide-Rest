@@ -32,12 +32,12 @@ def load_jokes():
     except FileNotFoundError:
         return {"jokes": []}
 
+# Чтение user_id из переменной окружения
 def load_users():
-    try:
-        with open('users.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {"users": []}
+    users_str = os.getenv("ALLOWED_USERS", "")
+    if not users_str:
+        return []
+    return [int(user_id) for user_id in users_str.split(",")]
 
 # Сохранение JSON и синхронизация с GitHub
 def save_guide(data):
@@ -47,12 +47,10 @@ def save_guide(data):
 
 def sync_with_github():
     try:
-        # Проверяем, есть ли изменения
         result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
         if "guide.json" not in result.stdout:
             print("No changes in guide.json to commit.")
             return
-        
         subprocess.run(["git", "add", "guide.json"], check=True)
         subprocess.run(["git", "commit", "-m", "Update guide.json via bot"], check=True)
         subprocess.run(["git", "push", "origin", "main"], check=True)
@@ -67,7 +65,7 @@ def restrict_access(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user_id = update.effective_user.id
         users = load_users()
-        if user_id not in users["users"]:
+        if user_id not in users:
             await update.message.reply_text("🚫 Доступ запрещён! Обратитесь к администратору.")
             return
         return await func(update, context, *args, **kwargs)
@@ -94,7 +92,6 @@ async def open_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guide["questions"]:
         await query.message.reply_text("📖 Справочник пуст. Добавьте первый пункт! ➕")
         return
-    
     keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'question_{q["id"]}')] for q in guide["questions"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     jokes = load_jokes()
@@ -117,11 +114,9 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyword = update.message.text.lower()
     guide = load_guide()
     results = [q for q in guide["questions"] if keyword in q["question"].lower() or keyword in q["answer"].lower()]
-    
     if not results:
         await update.message.reply_text("🔍 Ничего не найдено. Попробуйте другое ключевое слово!")
         return
-    
     keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'question_{q["id"]}')] for q in results]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(f"🔍 Результаты поиска для '{keyword}':", reply_markup=reply_markup)
@@ -159,7 +154,6 @@ async def edit_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guide["questions"]:
         await query.message.reply_text("📖 Справочник пуст. Нечего редактировать! ➕")
         return
-    
     keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'edit_question_{q["id"]}')] for q in guide["questions"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.reply_text("✏️ Выберите вопрос для редактирования:", reply_markup=reply_markup)
@@ -207,17 +201,12 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # Запуск бота
 def main():
     app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(open_guide, pattern='open_guide'))
     app.add_handler(CallbackQueryHandler(show_answer, pattern='question_.*'))
     app.add_handler(CallbackQueryHandler(add_point, pattern='add_point'))
     app.add_handler(CallbackQueryHandler(edit_point, pattern='edit_point'))
-    
-    # Поиск по любому текстовому сообщению
     app.add_handler(MessageHandler(Filters.text & ~Filters.command, perform_search))
-    
-    # Добавление пункта
     add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_point, pattern='add_point')],
         states={
@@ -227,8 +216,6 @@ def main():
         fallbacks=[]
     )
     app.add_handler(add_conv)
-    
-    # Редактирование пункта
     edit_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(edit_point, pattern='edit_point')],
         states={
@@ -239,7 +226,6 @@ def main():
         fallbacks=[]
     )
     app.add_handler(edit_conv)
-    
     app.run_polling()
 
 if __name__ == '__main__':
