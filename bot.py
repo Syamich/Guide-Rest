@@ -124,6 +124,9 @@ def restrict_access(func):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error: {context.error}")
     logger.info(f"Current conversation state: {context.user_data.get('conversation_state', 'None')}")
+    # Очищаем user_data и завершаем все диалоги
+    context.user_data.clear()
+    context.user_data['conversation_state'] = 'ERROR'
     if update.message:
         await update.message.reply_text(
             "❌ Произошла ошибка. Попробуйте снова или свяжитесь с администратором.",
@@ -134,8 +137,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Произошла ошибка. Попробуйте снова или свяжитесь с администратором.",
             reply_markup=MAIN_MENU
         )
-    # Очищаем user_data и завершаем все диалоги
-    context.user_data.clear()
     return ConversationHandler.END
 
 # Команда /start
@@ -153,6 +154,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restrict_access
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {update.effective_user.id} cancelled the conversation")
+    if context.user_data.get('timeout_task'):
+        context.user_data['timeout_task'].cancel()
+        context.user_data['timeout_task'] = None
+        logger.info(f"User {update.effective_user.id} cancelled timeout task")
     context.user_data.clear()  # Очищаем user_data
     context.user_data['conversation_state'] = 'CANCELLED'
     await update.message.reply_text(
@@ -290,14 +295,6 @@ async def add_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restrict_access
 async def receive_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Проверяем, что текст не является командой меню
-    if update.message.text in ["📖 Справочник", "➕ Добавить пункт", "✏️ Редактировать пункт"]:
-        logger.warning(f"User {update.effective_user.id} sent menu command '{update.message.text}' in QUESTION state")
-        await update.message.reply_text(
-            "❌ Пожалуйста, введите вопрос или используйте /cancel для отмены.",
-            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
-        )
-        return QUESTION
     context.user_data['new_question'] = update.message.text
     logger.info(f"User {update.effective_user.id} entered question: {update.message.text}")
     context.user_data['conversation_state'] = 'RECEIVE_QUESTION'
@@ -337,6 +334,7 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"User {update.effective_user.id} added single photo: {context.user_data['photos']}")
     # Сохраняем пункт, если нет альбома или это текстовый ответ
     await save_new_point(update, context, send_message=True)
+    logger.info(f"User {update.effective_user.id} ending add_conv in receive_answer")
     context.user_data.clear()  # Очищаем user_data
     context.user_data['conversation_state'] = 'POINT_SAVED'
     return ConversationHandler.END
@@ -358,6 +356,8 @@ async def check_album_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE
                 logger.error(f"Failed to delete loading message: {e}")
         await save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True  # Устанавливаем флаг после сохранения
+        context.user_data['timeout_task'] = None  # Очищаем задачу таймера
+        logger.info(f"User {update.effective_user.id} ending add_conv in check_album_timeout")
         context.user_data.clear()  # Очищаем user_data
         context.user_data['conversation_state'] = 'ALBUM_SAVED'
         return ConversationHandler.END
@@ -404,6 +404,7 @@ async def receive_answer_photos(update: Update, context: ContextTypes.DEFAULT_TY
         if context.user_data.get('timeout_task'):
             context.user_data['timeout_task'].cancel()
             context.user_data['timeout_task'] = None
+            logger.info(f"User {update.effective_user.id} cancelled timeout task in receive_answer_photos")
         # Удаляем сообщение "Загрузка"
         if context.user_data.get('loading_message_id'):
             try:
@@ -416,6 +417,7 @@ async def receive_answer_photos(update: Update, context: ContextTypes.DEFAULT_TY
                 logger.error(f"Failed to delete loading message: {e}")
         await save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True
+        logger.info(f"User {update.effective_user.id} ending add_conv in receive_answer_photos")
         context.user_data.clear()
         context.user_data['conversation_state'] = 'PHOTOS_SAVED'
         return ConversationHandler.END
@@ -590,7 +592,10 @@ async def main():
         entry_points=[MessageHandler(filters.Regex(r'^➕ Добавить пункт$'), add_point)],
         states={
             QUESTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_question),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    receive_question
+                ),
             ],
             ANSWER: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_answer),
