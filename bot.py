@@ -97,7 +97,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(f"Добро пожаловать в справочник техподдержки РЭСТ! 📋\n[Шутка: {joke}]", reply_markup=reply_markup)
 
+# Команда /cancel
+@restrict_access
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚪 Диалог отменён. Напишите /start для возврата в меню.")
+    return ConversationHandler.END
+
 # Открытие справочника
+@restrict_access
 async def open_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -112,6 +119,7 @@ async def open_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(f"📖 Справочник:\n[Шутка: {joke}]", reply_markup=reply_markup)
 
 # Показ ответа
+@restrict_access
 async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -124,8 +132,6 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Поиск по ключевым словам
 @restrict_access
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('__convo_state'):  # Проверяем, находится ли пользователь в диалоге
-        return  # Игнорируем поиск, если пользователь в состоянии диалога
     keyword = update.message.text.lower()
     guide = load_guide()
     results = [q for q in guide["questions"] if keyword in q["question"].lower() or keyword in q["answer"].lower()]
@@ -137,18 +143,20 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔍 Результаты поиска для '{keyword}':", reply_markup=reply_markup)
 
 # Добавление пункта
+@restrict_access
 async def add_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    context.user_data['__convo_state'] = 'add_point'  # Устанавливаем флаг диалога
-    await query.message.reply_text("➕ Введите вопрос (например, 'Ошибка входа в систему'):")
+    await query.message.reply_text("➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)")
     return QUESTION
 
+@restrict_access
 async def receive_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['new_question'] = update.message.text
-    await update.message.reply_text("Введите подсказку для решения:")
+    await update.message.reply_text("Введите подсказку для решения:\n(Напишите /cancel для отмены)")
     return ANSWER
 
+@restrict_access
 async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guide = load_guide()
     new_id = max([q["id"] for q in guide["questions"]], default=0) + 1
@@ -159,11 +167,11 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     guide["questions"].append(new_point)
     save_guide(guide)
-    context.user_data.pop('__convo_state', None)  # Удаляем флаг диалога
     await update.message.reply_text(f"➕ Пункт добавлен!\nВопрос: {new_point['question']}")
     return ConversationHandler.END
 
 # Редактирование пункта
+@restrict_access
 async def edit_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -171,11 +179,12 @@ async def edit_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guide["questions"]:
         await query.message.reply_text("📖 Справочник пуст. Нечего редактировать! ➕")
         return
-    context.user_data['__convo_state'] = 'edit_point'  # Устанавливаем флаг диалога
     keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'edit_question_{q["id"]}')] for q in guide["questions"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.reply_text("✏️ Выберите вопрос для редактирования:", reply_markup=reply_markup)
+    await query.message.reply_text("✏️ Выберите вопрос для редактирования:\n(Напишите /cancel для отмены)", reply_markup=reply_markup)
+    return EDIT_QUESTION
 
+@restrict_access
 async def select_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -186,9 +195,10 @@ async def select_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Удалить пункт", callback_data='edit_field_delete')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.reply_text("✏️ Что хотите изменить?", reply_markup=reply_markup)
+    await query.message.reply_text("✏️ Что хотите изменить?\n(Напишите /cancel для отмены)", reply_markup=reply_markup)
     return EDIT_FIELD
 
+@restrict_access
 async def receive_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -198,13 +208,13 @@ async def receive_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
         question_id = context.user_data['edit_question_id']
         guide["questions"] = [q for q in guide["questions"] if q["id"] != question_id]
         save_guide(guide)
-        context.user_data.pop('__convo_state', None)  # Удаляем флаг диалога
         await query.message.reply_text("🗑️ Пункт удалён!")
         return ConversationHandler.END
     field = "вопрос" if query.data == 'edit_field_question' else "ответ"
-    await query.message.reply_text(f"✏️ Введите новый {field}:")
+    await query.message.reply_text(f"✏️ Введите новый {field}:\n(Напишите /cancel для отмены)")
     return EDIT_VALUE
 
+@restrict_access
 async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guide = load_guide()
     question_id = context.user_data['edit_question_id']
@@ -214,7 +224,6 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
             q[field] = update.message.text
             break
     save_guide(guide)
-    context.user_data.pop('__convo_state', None)  # Удаляем флаг диалога
     await update.message.reply_text(f"✏️ {field.capitalize()} обновлён!")
     return ConversationHandler.END
 
@@ -222,18 +231,16 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def main():
     application = Application.builder().token(os.getenv("BOT_TOKEN")).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CallbackQueryHandler(open_guide, pattern='open_guide'))
     application.add_handler(CallbackQueryHandler(show_answer, pattern='question_.*'))
-    application.add_handler(CallbackQueryHandler(add_point, pattern='add_point'))
-    application.add_handler(CallbackQueryHandler(edit_point, pattern='edit_point'))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search))
     add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_point, pattern='add_point')],
         states={
             QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_question)],
             ANSWER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_answer)]
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(add_conv)
     edit_conv = ConversationHandler(
@@ -243,9 +250,10 @@ async def main():
             EDIT_FIELD: [CallbackQueryHandler(receive_edit_field, pattern='edit_field_.*')],
             EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_edit_value)]
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(edit_conv)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search))
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
