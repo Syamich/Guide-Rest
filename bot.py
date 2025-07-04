@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import random
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -11,6 +12,9 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+
+# Загрузка .env
+load_dotenv()
 
 # Состояния для ConversationHandler
 QUESTION, ANSWER = range(2)
