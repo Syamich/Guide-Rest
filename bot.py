@@ -7,9 +7,8 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
-    ConversationHandler,
     MessageHandler,
-    Filters,
+    filters,
     ContextTypes,
 )
 
@@ -206,12 +205,12 @@ def main():
     app.add_handler(CallbackQueryHandler(show_answer, pattern='question_.*'))
     app.add_handler(CallbackQueryHandler(add_point, pattern='add_point'))
     app.add_handler(CallbackQueryHandler(edit_point, pattern='edit_point'))
-    app.add_handler(MessageHandler(Filters.text & ~Filters.command, perform_search))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search))
     add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_point, pattern='add_point')],
         states={
-            QUESTION: [MessageHandler(Filters.text & ~Filters.command, receive_question)],
-            ANSWER: [MessageHandler(Filters.text & ~Filters.command, receive_answer)]
+            QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_question)],
+            ANSWER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_answer)]
         },
         fallbacks=[]
     )
@@ -221,7 +220,7 @@ def main():
         states={
             EDIT_QUESTION: [CallbackQueryHandler(select_edit_field, pattern='edit_question_.*')],
             EDIT_FIELD: [CallbackQueryHandler(receive_edit_field, pattern='edit_field_.*')],
-            EDIT_VALUE: [MessageHandler(Filters.text & ~Filters.command, receive_edit_value)]
+            EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_edit_value)]
         },
         fallbacks=[]
     )
