@@ -264,6 +264,7 @@ async def add_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['media_group_id'] = None
     context.user_data['last_photo_time'] = None
     context.user_data['point_saved'] = False  # Флаг для предотвращения дублирования
+    context.user_data['loading_message_id'] = None  # Для сообщения "Загрузка"
     await update.message.reply_text(
         "➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
@@ -295,6 +296,10 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['photos'].append(update.message.photo[-1].file_id)
             context.user_data['last_photo_time'] = update.message.date
             logger.info(f"User {update.effective_user.id} added photo to media group {update.message.media_group_id}: {update.message.photo[-1].file_id}")
+            # Отправляем сообщение "Загрузка" при первой фотографии
+            if len(context.user_data['photos']) == 1:
+                loading_message = await update.message.reply_text("⏳ Загрузка...")
+                context.user_data['loading_message_id'] = loading_message.message_id
             # Запускаем таймер для завершения альбома
             asyncio.create_task(check_album_timeout(update, context))
             return ANSWER_PHOTOS
@@ -312,6 +317,13 @@ async def check_album_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE
     await asyncio.sleep(2)
     if context.user_data.get('last_photo_time') == update.message.date and not context.user_data.get('point_saved'):
         logger.info(f"User {update.effective_user.id} finished album for media group {context.user_data.get('media_group_id')}")
+        # Удаляем сообщение "Загрузка"
+        if context.user_data.get('loading_message_id'):
+            try:
+                await update.message.chat.delete_message(context.user_data['loading_message_id'])
+                logger.info(f"User {update.effective_user.id} deleted loading message")
+            except Exception as e:
+                logger.error(f"Failed to delete loading message: {e}")
         await save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True  # Устанавливаем флаг после сохранения
         context.user_data.clear()  # Очищаем user_data после отправки
@@ -352,12 +364,21 @@ async def receive_answer_photos(update: Update, context: ContextTypes.DEFAULT_TY
         if not context.user_data.get('point_saved'):
             asyncio.create_task(check_album_timeout(update, context))
         return ANSWER_PHOTOS
-    # Если получено сообщение с новым media_group_id или без него, сохраняем текущий пункт
-    if not context.user_data.get('point_saved'):
+    # Если получено сообщение с новым media_group_id или без него, завершаем текущий альбом
+    if not context.user_data.get('point_saved') and context.user_data.get('photos'):
+        logger.info(f"User {update.effective_user.id} finished album for media group {context.user_data.get('media_group_id')} due to new message")
+        # Удаляем сообщение "Загрузка"
+        if context.user_data.get('loading_message_id'):
+            try:
+                await update.message.chat.delete_message(context.user_data['loading_message_id'])
+                logger.info(f"User {update.effective_user.id} deleted loading message")
+            except Exception as e:
+                logger.error(f"Failed to delete loading message: {e}")
         await save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True
-    context.user_data.clear()
-    return ConversationHandler.END
+        context.user_data.clear()
+        return ConversationHandler.END
+    return ANSWER_PHOTOS
 
 # Редактирование пункта
 @restrict_access
