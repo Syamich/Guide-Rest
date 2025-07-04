@@ -264,7 +264,8 @@ async def add_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['media_group_id'] = None
     context.user_data['last_photo_time'] = None
     context.user_data['point_saved'] = False  # Флаг для предотвращения дублирования
-    context.user_data['loading_message_id'] = None  # Для сообщения "Загрузка"
+    context.user_data['loading_message_id'] = None
+    context.user_data['timeout_task'] = None  # Для хранения задачи таймера
     await update.message.reply_text(
         "➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
@@ -300,8 +301,9 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(context.user_data['photos']) == 1:
                 loading_message = await update.message.reply_text("⏳ Загрузка...")
                 context.user_data['loading_message_id'] = loading_message.message_id
-            # Запускаем таймер для завершения альбома
-            asyncio.create_task(check_album_timeout(update, context))
+                # Запускаем таймер только если он ещё не запущен
+                if not context.user_data.get('timeout_task'):
+                    context.user_data['timeout_task'] = asyncio.create_task(check_album_timeout(update, context))
             return ANSWER_PHOTOS
         else:
             # Одиночная фотография
@@ -320,7 +322,10 @@ async def check_album_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Удаляем сообщение "Загрузка"
         if context.user_data.get('loading_message_id'):
             try:
-                await update.message.chat.delete_message(context.user_data['loading_message_id'])
+                await context.bot.delete_message(
+                    chat_id=update.effective_chat.id,
+                    message_id=context.user_data['loading_message_id']
+                )
                 logger.info(f"User {update.effective_user.id} deleted loading message")
             except Exception as e:
                 logger.error(f"Failed to delete loading message: {e}")
@@ -360,17 +365,24 @@ async def receive_answer_photos(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data['photos'].append(update.message.photo[-1].file_id)
         context.user_data['last_photo_time'] = update.message.date
         logger.info(f"User {update.effective_user.id} added photo to media group: {update.message.photo[-1].file_id}")
-        # Перезапускаем таймер только если не сохранено
-        if not context.user_data.get('point_saved'):
-            asyncio.create_task(check_album_timeout(update, context))
+        # Запускаем таймер только если он ещё не запущен
+        if not context.user_data.get('timeout_task'):
+            context.user_data['timeout_task'] = asyncio.create_task(check_album_timeout(update, context))
         return ANSWER_PHOTOS
     # Если получено сообщение с новым media_group_id или без него, завершаем текущий альбом
     if not context.user_data.get('point_saved') and context.user_data.get('photos'):
         logger.info(f"User {update.effective_user.id} finished album for media group {context.user_data.get('media_group_id')} due to new message")
+        # Отменяем существующий таймер, если он есть
+        if context.user_data.get('timeout_task'):
+            context.user_data['timeout_task'].cancel()
+            context.user_data['timeout_task'] = None
         # Удаляем сообщение "Загрузка"
         if context.user_data.get('loading_message_id'):
             try:
-                await update.message.chat.delete_message(context.user_data['loading_message_id'])
+                await context.bot.delete_message(
+                    chat_id=update.effective_chat.id,
+                    message_id=context.user_data['loading_message_id']
+                )
                 logger.info(f"User {update.effective_user.id} deleted loading message")
             except Exception as e:
                 logger.error(f"Failed to delete loading message: {e}")
@@ -391,7 +403,7 @@ async def edit_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📖 Справочник пуст. Нечего редактировать! ➕",
             reply_markup=MAIN_MENU
         )
-        return
+        return ConversationHandler.END
     context.user_data['guide'] = guide
     context.user_data['page'] = 0
     await display_edit_page(update, context, guide, 0)
