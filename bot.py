@@ -79,19 +79,13 @@ def sync_with_github():
     try:
         # Проверяем статус
         result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
-        if "guide.json" not in result.stdout:
-            logger.info("No changes in guide.json to commit")
+        if not result.stdout:
+            logger.info("No changes in working directory to commit")
             return
-        # Сохраняем изменения
-        subprocess.run(["git", "add", "guide.json"], check=True)
+        # Сохраняем все изменения
+        subprocess.run(["git", "add", "."], check=True)
         subprocess.run(["git", "commit", "-m", "Update guide.json via bot"], check=True)
-        # Проверяем, есть ли несохранённые изменения
-        result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
-        if result.stdout:
-            logger.warning(f"Unstaged changes detected: {result.stdout}")
-            subprocess.run(["git", "add", "."], check=True)
-            subprocess.run(["git", "commit", "-m", "Commit unstaged changes before pull"], check=True)
-        # Пытаемся синхронизировать
+        # Синхронизируем
         subprocess.run(["git", "pull", "--rebase"], check=True)
         subprocess.run(["git", "push", "origin", "main"], check=True)
         logger.info("Successfully synced guide.json to GitHub")
@@ -269,6 +263,7 @@ async def add_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['photos'] = []  # Инициализируем список для фотографий
     context.user_data['media_group_id'] = None
     context.user_data['last_photo_time'] = None
+    context.user_data['point_saved'] = False  # Флаг для предотвращения дублирования
     await update.message.reply_text(
         "➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
@@ -308,20 +303,25 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['photos'] = [update.message.photo[-1].file_id]
             logger.info(f"User {update.effective_user.id} added single photo: {context.user_data['photos']}")
     # Сохраняем пункт, если нет альбома или это текстовый ответ
-    await save_new_point(update, context)
+    await save_new_point(update, context, send_message=True)
+    context.user_data.clear()  # Очищаем user_data
     return ConversationHandler.END
 
 async def check_album_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Ждём 2 секунды, чтобы собрать все фотографии альбома
     await asyncio.sleep(2)
-    if context.user_data.get('last_photo_time') == update.message.date:
+    if context.user_data.get('last_photo_time') == update.message.date and not context.user_data.get('point_saved'):
         logger.info(f"User {update.effective_user.id} finished album for media group {context.user_data.get('media_group_id')}")
         await save_new_point(update, context, send_message=True)
+        context.user_data['point_saved'] = True  # Устанавливаем флаг после сохранения
         context.user_data.clear()  # Очищаем user_data после отправки
         return ConversationHandler.END
     return None
 
 async def save_new_point(update: Update, context: ContextTypes.DEFAULT_TYPE, send_message: bool = False):
+    if context.user_data.get('point_saved'):
+        logger.info(f"User {update.effective_user.id} skipped saving point as it was already saved")
+        return
     guide = load_guide()
     new_id = max([q["id"] for q in guide["questions"]], default=0) + 1
     new_point = {
@@ -335,11 +335,12 @@ async def save_new_point(update: Update, context: ContextTypes.DEFAULT_TYPE, sen
     guide["questions"].append(new_point)
     save_guide(guide)
     logger.info(f"User {update.effective_user.id} added new point: {new_point['question']}")
-    if send_message or not context.user_data.get('media_group_id'):
+    if send_message:
         await update.message.reply_text(
             f"➕ Пункт добавлен!\nВопрос: {new_point['question']}",
             reply_markup=MAIN_MENU
         )
+    context.user_data['point_saved'] = True  # Устанавливаем флаг после сохранения
 
 @restrict_access
 async def receive_answer_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -347,11 +348,15 @@ async def receive_answer_photos(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data['photos'].append(update.message.photo[-1].file_id)
         context.user_data['last_photo_time'] = update.message.date
         logger.info(f"User {update.effective_user.id} added photo to media group: {update.message.photo[-1].file_id}")
-        # Перезапускаем таймер
-        asyncio.create_task(check_album_timeout(update, context))
+        # Перезапускаем таймер только если не сохранено
+        if not context.user_data.get('point_saved'):
+            asyncio.create_task(check_album_timeout(update, context))
         return ANSWER_PHOTOS
     # Если получено сообщение с новым media_group_id или без него, сохраняем текущий пункт
-    await save_new_point(update, context, send_message=True)
+    if not context.user_data.get('point_saved'):
+        await save_new_point(update, context, send_message=True)
+        context.user_data['point_saved'] = True
+    context.user_data.clear()
     return ConversationHandler.END
 
 # Редактирование пункта
