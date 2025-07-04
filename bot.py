@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import random
+import asyncio
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -9,6 +10,7 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ConversationHandler,
     filters,
     ContextTypes,
 )
@@ -211,13 +213,13 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # Запуск бота
 async def main():
-    app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(open_guide, pattern='open_guide'))
-    app.add_handler(CallbackQueryHandler(show_answer, pattern='question_.*'))
-    app.add_handler(CallbackQueryHandler(add_point, pattern='add_point'))
-    app.add_handler(CallbackQueryHandler(edit_point, pattern='edit_point'))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search))
+    application = await Application.builder().token(os.getenv("BOT_TOKEN")).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(open_guide, pattern='open_guide'))
+    application.add_handler(CallbackQueryHandler(show_answer, pattern='question_.*'))
+    application.add_handler(CallbackQueryHandler(add_point, pattern='add_point'))
+    application.add_handler(CallbackQueryHandler(edit_point, pattern='edit_point'))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search))
     add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_point, pattern='add_point')],
         states={
@@ -226,7 +228,7 @@ async def main():
         },
         fallbacks=[]
     )
-    app.add_handler(add_conv)
+    application.add_handler(add_conv)
     edit_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(edit_point, pattern='edit_point')],
         states={
@@ -236,9 +238,18 @@ async def main():
         },
         fallbacks=[]
     )
-    app.add_handler(edit_conv)
-    await app.run_polling()
+    application.add_handler(edit_conv)
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    print("Bot is running...")
+    # Keep the bot running until interrupted
+    try:
+        while True:
+            await asyncio.sleep(3600)  # Sleep for an hour to keep the event loop alive
+    except KeyboardInterrupt:
+        await application.stop()
+        await application.updater.stop()
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())
