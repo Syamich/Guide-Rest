@@ -20,6 +20,11 @@
         "AgACAgIAAxkBAAICwWhrZ95Ik_Er1ndn1iyP-9bodgnuAALd-TEbEAhZS2qH28EdC_LeAQADAgADeQADNgQ",
         "AgACAgIAAxkBAAICwmhrZ95fai7ITjsxXQUckIGiVER9AALc-TEbEAhZSyA_9MrVc-80AQADAgADeQADNgQ"
       ]
+    },
+    {
+      "id": 4,
+      "question": "Документы при подаче заявки на участие",
+      "answer": "Основная часть 1 - док-ты из репозитория\nОсновная часть 2 - остальные док-ты, которые устанавливает заказчик в извещении\nКоммерческая часть - печатная заявка на участие"
     }
   ]
 }
