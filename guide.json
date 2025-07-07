@@ -12,16 +12,6 @@
       "photo": "AgACAgIAAxkBAAOdaGeYbNDJ8fijZ27ow8-2aNDBnzQAAr_vMRsXEEFLUkIV4Sa952kBAAMCAAN5AAM2BA"
     },
     {
-      "id": 3,
-      "question": "Тарифы",
-      "answer": "На площадке теперь только 2 секции по тарифам: \n1. Стандарт - 2% от НМЦД\n2. Персональные (все остальные)\nНа странице тарифов они отображены(поменяли), скрины приложил.\nВ секции Персональные ниже есть список установленных тарифов в них есть тариф Индивидуальный(бывший базовый при выборе тарифа на закупку - 1% с победителя).\nВсе остальные тарифы которых нет в списке, для них есть отдельная фраза на сайте, прикрепил скрин.",
-      "photos": [
-        "AgACAgIAAxkBAAICwGhrZ95TB6ccszjRA-bqo1FZRkItAALb-TEbEAhZS2_8H57NDFLEAQADAgADeQADNgQ",
-        "AgACAgIAAxkBAAICwWhrZ95Ik_Er1ndn1iyP-9bodgnuAALd-TEbEAhZS2qH28EdC_LeAQADAgADeQADNgQ",
-        "AgACAgIAAxkBAAICwmhrZ95fai7ITjsxXQUckIGiVER9AALc-TEbEAhZSyA_9MrVc-80AQADAgADeQADNgQ"
-      ]
-    },
-    {
       "id": 4,
       "question": "Документы при подаче заявки на участие",
       "answer": "Основная часть 1 - док-ты из репозитория\nОсновная часть 2 - остальные док-ты, которые устанавливает заказчик в извещении\nКоммерческая часть - печатная заявка на участие"
