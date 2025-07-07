@@ -1,18 +1,17 @@
 import json
 import os
 import subprocess
-import asyncio
 import logging
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
-    Application,
+    Updater,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
     ConversationHandler,
-    filters,
-    ContextTypes,
+    Filters,
+    CallbackContext,
 )
 
 # Настройка логирования
@@ -77,22 +76,18 @@ def save_guide(data):
 
 def sync_with_github():
     try:
-        # Проверяем статус
         result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
         if not result.stdout:
             logger.info("No changes in working directory to commit")
             return
-        # Сохраняем все изменения
         subprocess.run(["git", "add", "."], check=True)
         subprocess.run(["git", "commit", "-m", "Update guide.json via bot"], check=True)
-        # Синхронизируем
         subprocess.run(["git", "pull", "--rebase"], check=True)
         subprocess.run(["git", "push", "origin", "main"], check=True)
         logger.info("Successfully synced guide.json to GitHub")
     except subprocess.CalledProcessError as e:
         logger.error(f"Git sync error: {e}")
         try:
-            # Пробуем разрешить конфликт
             subprocess.run(["git", "rebase", "--abort"], check=True)
             subprocess.run(["git", "pull", "--no-rebase"], check=True)
             subprocess.run(["git", "push", "origin", "main"], check=True)
@@ -104,7 +99,7 @@ def sync_with_github():
 
 # Проверка доступа
 def restrict_access(func):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+    def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
         user_id = update.effective_user.id
         logger.info(f"Checking access for user_id: {user_id}")
         users = load_users()
@@ -112,28 +107,27 @@ def restrict_access(func):
         if user_id not in users:
             error_msg = "🚫 Доступ запрещён! Обратитесь к администратору."
             if update.message:
-                await update.message.reply_text(error_msg, reply_markup=MAIN_MENU)
+                update.message.reply_text(error_msg, reply_markup=MAIN_MENU)
             elif update.callback_query:
-                await update.callback_query.message.reply_text(error_msg, reply_markup=MAIN_MENU)
+                update.callback_query.message.reply_text(error_msg, reply_markup=MAIN_MENU)
             logger.warning(f"Unauthorized access attempt by user {user_id}")
             return
-        return await func(update, context, *args, **kwargs)
+        return func(update, context, *args, **kwargs)
     return wrapper
 
 # Обработчик ошибок
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def error_handler(update: Update, context: CallbackContext):
     logger.error(f"Update {update} caused error: {context.error}")
     logger.info(f"Current conversation state: {context.user_data.get('conversation_state', 'None')}")
-    # Очищаем user_data и завершаем все диалоги
     context.user_data.clear()
     context.user_data['conversation_state'] = 'ERROR'
     if update.message:
-        await update.message.reply_text(
+        update.message.reply_text(
             "❌ Произошла ошибка. Попробуйте снова или свяжитесь с администратором.",
             reply_markup=MAIN_MENU
         )
     elif update.callback_query:
-        await update.callback_query.message.reply_text(
+        update.callback_query.message.reply_text(
             "❌ Произошла ошибка. Попробуйте снова или свяжитесь с администратором.",
             reply_markup=MAIN_MENU
         )
@@ -141,26 +135,27 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Команда /start
 @restrict_access
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} started the bot")
-    context.user_data.clear()  # Очищаем user_data
+    context.user_data.clear()
     context.user_data['conversation_state'] = 'START'
-    await update.message.reply_text(
+    update.message.reply_text(
         "Добро пожаловать в справочник техподдержки РЭСТ! 📋\nВыберите действие:",
         reply_markup=MAIN_MENU
     )
+    return ConversationHandler.END
 
 # Команда /cancel
 @restrict_access
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def cancel(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} cancelled the conversation")
     if context.user_data.get('timeout_task'):
         context.user_data['timeout_task'].cancel()
         context.user_data['timeout_task'] = None
         logger.info(f"User {update.effective_user.id} cancelled timeout task")
-    context.user_data.clear()  # Очищаем user_data
+    context.user_data.clear()
     context.user_data['conversation_state'] = 'CANCELLED'
-    await update.message.reply_text(
+    update.message.reply_text(
         "🚪 Диалог отменён. Выберите действие:",
         reply_markup=MAIN_MENU
     )
@@ -168,26 +163,27 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Открытие справочника с пагинацией
 @restrict_access
-async def open_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def open_guide(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} opened the guide")
-    context.user_data.clear()  # Очищаем user_data
+    context.user_data.clear()
     context.user_data['conversation_state'] = 'OPEN_GUIDE'
     guide = load_guide()
     if not guide["questions"]:
-        await update.message.reply_text(
+        update.message.reply_text(
             "📖 Справочник пуст. Добавьте первый пункт! ➕",
             reply_markup=MAIN_MENU
         )
-        return
+        return ConversationHandler.END
     page = context.user_data.get('page', 0)
-    await display_guide_page(update, context, guide, page)
+    display_guide_page(update, context, guide, page)
+    return ConversationHandler.END
 
 # Отображение страницы справочника
-async def display_guide_page(update: Update, context: ContextTypes.DEFAULT_TYPE, guide, page):
+def display_guide_page(update: Update, context: CallbackContext, guide, page):
     ITEMS_PER_PAGE = 15
     total_items = len(guide["questions"])
     total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
-    page = max(0, min(page, total_pages - 1))  # Ограничиваем страницу
+    page = max(0, min(page, total_pages - 1))
     context.user_data['page'] = page
     context.user_data['guide'] = guide
 
@@ -207,163 +203,173 @@ async def display_guide_page(update: Update, context: ContextTypes.DEFAULT_TYPE,
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = f"📖 Справочник (страница {page + 1}/{total_pages}):"
     if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup)
+        update.message.reply_text(text, reply_markup=reply_markup)
     elif update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+        update.callback_query.message.edit_text(text, reply_markup=reply_markup)
     logger.info(f"User {update.effective_user.id} viewed guide page {page + 1}")
     context.user_data['conversation_state'] = 'GUIDE_PAGE'
+    return ConversationHandler.END
 
 # Показ ответа
 @restrict_access
-async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def show_answer(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     question_id = int(query.data.split('_')[1])
     logger.info(f"User {update.effective_user.id} requested answer for question ID {question_id}")
     guide = load_guide()
     question = next((q for q in guide["questions"] if q["id"] == question_id), None)
     if question:
         response = f"📄 Вопрос: {question['question']}\nОтвет: {question['answer']}"
-        # Поддержка обратной совместимости: проверяем 'photo' и 'photos'
         photo_ids = question.get('photos', []) or ([question['photo']] if question.get('photo') else [])
         if ENABLE_PHOTOS and photo_ids:
             if len(photo_ids) == 1:
-                # Одна фотография
-                await query.message.reply_photo(
+                query.message.reply_photo(
                     photo=photo_ids[0],
                     caption=response,
                     reply_markup=MAIN_MENU
                 )
             else:
-                # Несколько фотографий как альбом
                 media = [InputMediaPhoto(media=photo_id, caption=response if i == 0 else None) for i, photo_id in enumerate(photo_ids)]
-                await query.message.reply_media_group(media=media)
-                # Отправляем главное меню отдельным сообщением
-                await query.message.reply_text("Выберите действие:", reply_markup=MAIN_MENU)
+                query.message.reply_media_group(media=media)
+                query.message.reply_text("Выберите действие:", reply_markup=MAIN_MENU)
         else:
-            await query.message.reply_text(response, reply_markup=MAIN_MENU)
+            query.message.reply_text(response, reply_markup=MAIN_MENU)
     else:
-        await query.message.reply_text("❌ Вопрос не найден!", reply_markup=MAIN_MENU)
-    context.user_data.clear()  # Очищаем user_data
+        query.message.reply_text("❌ Вопрос не найден!", reply_markup=MAIN_MENU)
+    context.user_data.clear()
     context.user_data['conversation_state'] = 'SHOW_ANSWER'
+    return ConversationHandler.END
 
 # Обработка пагинации
 @restrict_access
-async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_pagination(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     page = int(query.data.split('_')[1])
     guide = context.user_data.get('guide', load_guide())
-    await display_guide_page(update, context, guide, page)
+    display_guide_page(update, context, guide, page)
     context.user_data['conversation_state'] = 'PAGINATION'
+    return ConversationHandler.END
 
 # Поиск по ключевым словам
 @restrict_access
-async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def perform_search(update: Update, context: CallbackContext):
     keyword = update.message.text.lower()
     logger.info(f"User {update.effective_user.id} searched for '{keyword}'")
     guide = load_guide()
     results = [q for q in guide["questions"] if keyword in q["question"].lower() or keyword in q["answer"].lower()]
     if not results:
-        await update.message.reply_text(
+        update.message.reply_text(
             "🔍 Ничего не найдено. Попробуйте другое ключевое слово!",
             reply_markup=MAIN_MENU
         )
         return
     context.user_data['guide'] = {"questions": results}
     context.user_data['page'] = 0
-    await display_guide_page(update, context, {"questions": results}, 0)
+    display_guide_page(update, context, {"questions": results}, 0)
     context.user_data['conversation_state'] = 'SEARCH'
+    return ConversationHandler.END
 
 # Добавление пункта
 @restrict_access
-async def add_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def add_point(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} started adding a new point")
-    context.user_data.clear()  # Очищаем user_data
-    context.user_data['photos'] = []  # Инициализируем список для фотографий
+    context.user_data.clear()
+    context.user_data['photos'] = []
     context.user_data['media_group_id'] = None
     context.user_data['last_photo_time'] = None
-    context.user_data['point_saved'] = False  # Флаг для предотвращения дублирования
+    context.user_data['point_saved'] = False
     context.user_data['loading_message_id'] = None
-    context.user_data['timeout_task'] = None  # Для хранения задачи таймера
+    context.user_data['timeout_task'] = None
     context.user_data['conversation_state'] = 'ADD_POINT'
-    await update.message.reply_text(
-        "➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
-        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
-    )
+    try:
+        update.message.reply_text(
+            "➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
+            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+        )
+        logger.info(f"User {update.effective_user.id} successfully triggered add_point")
+    except Exception as e:
+        logger.error(f"Error in add_point for user {update.effective_user.id}: {e}")
+        update.message.reply_text(
+            "❌ Ошибка при добавлении пункта. Попробуйте снова.",
+            reply_markup=MAIN_MENU
+        )
+        return ConversationHandler.END
     return QUESTION
 
 @restrict_access
-async def receive_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_question'] = update.message.text
+def receive_question(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} entered question: {update.message.text}")
+    if context.user_data.get('conversation_state') != 'ADD_POINT':
+        logger.warning(f"Unexpected question input from user {update.effective_user.id} in state {context.user_data.get('conversation_state')}")
+        update.message.reply_text(
+            "❌ Пожалуйста, начните добавление пункта заново (нажмите '➕ Добавить пункт').",
+            reply_markup=MAIN_MENU
+        )
+        return ConversationHandler.END
+    context.user_data['new_question'] = update.message.text
     context.user_data['conversation_state'] = 'RECEIVE_QUESTION'
     prompt = "Введите подсказку для решения"
     if ENABLE_PHOTOS:
         prompt += " (или отправьте фото/альбом с подписью)"
     prompt += ":\n(Напишите /cancel для отмены)"
-    await update.message.reply_text(
+    update.message.reply_text(
         prompt,
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
     )
     return ANSWER
 
 @restrict_access
-async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Сохраняем текст ответа
+def receive_answer(update: Update, context: CallbackContext):
     context.user_data['answer'] = update.message.caption if update.message.photo else update.message.text if update.message.text else ""
     context.user_data['conversation_state'] = 'RECEIVE_ANSWER'
     if ENABLE_PHOTOS and update.message.photo:
-        # Проверяем, является ли сообщение частью альбома
         if update.message.media_group_id:
             context.user_data['media_group_id'] = update.message.media_group_id
             context.user_data['photos'].append(update.message.photo[-1].file_id)
             context.user_data['last_photo_time'] = update.message.date
             logger.info(f"User {update.effective_user.id} added photo to media group {update.message.media_group_id}: {update.message.photo[-1].file_id}")
-            # Отправляем сообщение "Загрузка" при первой фотографии
             if len(context.user_data['photos']) == 1:
-                loading_message = await update.message.reply_text("⏳ Загрузка...")
+                loading_message = update.message.reply_text("⏳ Загрузка...")
                 context.user_data['loading_message_id'] = loading_message.message_id
-                # Запускаем таймер только если он ещё не запущен
                 if not context.user_data.get('timeout_task'):
-                    context.user_data['timeout_task'] = asyncio.create_task(check_album_timeout(update, context))
+                    context.user_data['timeout_task'] = context.job_queue.run_once(
+                        check_album_timeout, 2, context=(update, context)
+                    )
             return ANSWER_PHOTOS
         else:
-            # Одиночная фотография
             context.user_data['photos'] = [update.message.photo[-1].file_id]
             logger.info(f"User {update.effective_user.id} added single photo: {context.user_data['photos']}")
-    # Сохраняем пункт, если нет альбома или это текстовый ответ
-    await save_new_point(update, context, send_message=True)
+    save_new_point(update, context, send_message=True)
     logger.info(f"User {update.effective_user.id} ending add_conv in receive_answer")
-    context.user_data.clear()  # Очищаем user_data
+    context.user_data.clear()
     context.user_data['conversation_state'] = 'POINT_SAVED'
     return ConversationHandler.END
 
-async def check_album_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Ждём 2 секунды, чтобы собрать все фотографии альбома
-    await asyncio.sleep(2)
+def check_album_timeout(context: CallbackContext):
+    update, context = context.job.context
     if context.user_data.get('last_photo_time') == update.message.date and not context.user_data.get('point_saved'):
         logger.info(f"User {update.effective_user.id} finished album for media group {context.user_data.get('media_group_id')}")
-        # Удаляем сообщение "Загрузка"
         if context.user_data.get('loading_message_id'):
             try:
-                await context.bot.delete_message(
+                context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=context.user_data['loading_message_id']
                 )
                 logger.info(f"User {update.effective_user.id} deleted loading message")
             except Exception as e:
                 logger.error(f"Failed to delete loading message: {e}")
-        await save_new_point(update, context, send_message=True)
-        context.user_data['point_saved'] = True  # Устанавливаем флаг после сохранения
-        context.user_data['timeout_task'] = None  # Очищаем задачу таймера
+        save_new_point(update, context, send_message=True)
+        context.user_data['point_saved'] = True
+        context.user_data['timeout_task'] = None
         logger.info(f"User {update.effective_user.id} ending add_conv in check_album_timeout")
-        context.user_data.clear()  # Очищаем user_data
+        context.user_data.clear()
         context.user_data['conversation_state'] = 'ALBUM_SAVED'
         return ConversationHandler.END
     return None
 
-async def save_new_point(update: Update, context: ContextTypes.DEFAULT_TYPE, send_message: bool = False):
+def save_new_point(update: Update, context: CallbackContext, send_message: bool = False):
     if context.user_data.get('point_saved'):
         logger.info(f"User {update.effective_user.id} skipped saving point as it was already saved")
         return
@@ -381,41 +387,39 @@ async def save_new_point(update: Update, context: ContextTypes.DEFAULT_TYPE, sen
     save_guide(guide)
     logger.info(f"User {update.effective_user.id} added new point: {new_point['question']}")
     if send_message:
-        await update.message.reply_text(
+        update.message.reply_text(
             f"➕ Пункт добавлен!\nВопрос: {new_point['question']}",
             reply_markup=MAIN_MENU
         )
-    context.user_data['point_saved'] = True  # Устанавливаем флаг после сохранения
+    context.user_data['point_saved'] = True
 
 @restrict_access
-async def receive_answer_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def receive_answer_photos(update: Update, context: CallbackContext):
     if update.message.media_group_id == context.user_data.get('media_group_id'):
         context.user_data['photos'].append(update.message.photo[-1].file_id)
         context.user_data['last_photo_time'] = update.message.date
         logger.info(f"User {update.effective_user.id} added photo to media group: {update.message.photo[-1].file_id}")
-        # Запускаем таймер только если он ещё не запущен
         if not context.user_data.get('timeout_task'):
-            context.user_data['timeout_task'] = asyncio.create_task(check_album_timeout(update, context))
+            context.user_data['timeout_task'] = context.job_queue.run_once(
+                check_album_timeout, 2, context=(update, context)
+            )
         return ANSWER_PHOTOS
-    # Если получено сообщение с новым media_group_id или без него, завершаем текущий альбом
     if not context.user_data.get('point_saved') and context.user_data.get('photos'):
         logger.info(f"User {update.effective_user.id} finished album for media group {context.user_data.get('media_group_id')} due to new message")
-        # Отменяем существующий таймер, если он есть
         if context.user_data.get('timeout_task'):
             context.user_data['timeout_task'].cancel()
             context.user_data['timeout_task'] = None
             logger.info(f"User {update.effective_user.id} cancelled timeout task in receive_answer_photos")
-        # Удаляем сообщение "Загрузка"
         if context.user_data.get('loading_message_id'):
             try:
-                await context.bot.delete_message(
+                context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=context.user_data['loading_message_id']
                 )
                 logger.info(f"User {update.effective_user.id} deleted loading message")
             except Exception as e:
                 logger.error(f"Failed to delete loading message: {e}")
-        await save_new_point(update, context, send_message=True)
+        save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True
         logger.info(f"User {update.effective_user.id} ending add_conv in receive_answer_photos")
         context.user_data.clear()
@@ -423,30 +427,29 @@ async def receive_answer_photos(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
     return ANSWER_PHOTOS
 
-# Редактирование пункта
 @restrict_access
-async def edit_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def edit_point(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} started editing a point")
-    context.user_data.clear()  # Очищаем user_data
+    context.user_data.clear()
     context.user_data['conversation_state'] = 'EDIT_POINT'
     guide = load_guide()
     if not guide["questions"]:
-        await update.message.reply_text(
+        update.message.reply_text(
             "📖 Справочник пуст. Нечего редактировать! ➕",
             reply_markup=MAIN_MENU
         )
         return ConversationHandler.END
     context.user_data['guide'] = guide
     context.user_data['page'] = 0
-    await display_edit_page(update, context, guide, 0)
+    display_edit_page(update, context, guide, 0)
     return EDIT_QUESTION
 
 # Отображение страницы для редактирования
-async def display_edit_page(update: Update, context: ContextTypes.DEFAULT_TYPE, guide, page):
+def display_edit_page(update: Update, context: CallbackContext, guide, page):
     ITEMS_PER_PAGE = 15
     total_items = len(guide["questions"])
     total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
-    page = max(0, min(page, total_pages - 1))  # Ограничиваем страницу
+    page = max(0, min(page, total_pages - 1))
     context.user_data['page'] = page
     context.user_data['guide'] = guide
 
@@ -466,32 +469,33 @@ async def display_edit_page(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = f"✏️ Выберите вопрос для редактирования (страница {page + 1}/{total_pages}):"
     if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup)
+        update.message.reply_text(text, reply_markup=reply_markup)
     elif update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+        update.callback_query.message.edit_text(text, reply_markup=reply_markup)
     logger.info(f"User {update.effective_user.id} viewed edit page {page + 1}")
     context.user_data['conversation_state'] = 'EDIT_PAGE'
+    return ConversationHandler.END
 
 # Обработка пагинации для редактирования
 @restrict_access
-async def handle_edit_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_edit_pagination(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     if query.data == 'cancel_edit':
         context.user_data.clear()
         context.user_data['conversation_state'] = 'CANCEL_EDIT'
-        await query.message.reply_text("🚪 Редактирование отменено.", reply_markup=MAIN_MENU)
+        query.message.reply_text("🚪 Редактирование отменено.", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     page = int(query.data.split('_')[2])
     guide = context.user_data.get('guide', load_guide())
-    await display_edit_page(update, context, guide, page)
+    display_edit_page(update, context, guide, page)
     context.user_data['conversation_state'] = 'EDIT_PAGINATION'
     return EDIT_QUESTION
 
 @restrict_access
-async def select_edit_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def select_edit_question(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     context.user_data['edit_question_id'] = int(query.data.split('_')[2])
     logger.info(f"User {update.effective_user.id} selected question ID {context.user_data['edit_question_id']} for editing")
     context.user_data['conversation_state'] = 'SELECT_EDIT_QUESTION'
@@ -504,17 +508,17 @@ async def select_edit_question(update: Update, context: ContextTypes.DEFAULT_TYP
         keyboard.insert(2, [InlineKeyboardButton("Добавить/изменить фото", callback_data='edit_field_photo')])
     keyboard.append([InlineKeyboardButton("🚪 Отмена", callback_data='cancel_edit')])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.reply_text("✏️ Что хотите изменить?", reply_markup=reply_markup)
+    query.message.reply_text("✏️ Что хотите изменить?", reply_markup=reply_markup)
     return EDIT_FIELD
 
 @restrict_access
-async def receive_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def receive_edit_field(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     if query.data == 'cancel_edit':
         context.user_data.clear()
         context.user_data['conversation_state'] = 'CANCEL_EDIT'
-        await query.message.reply_text("🚪 Редактирование отменено.", reply_markup=MAIN_MENU)
+        query.message.reply_text("🚪 Редактирование отменено.", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     context.user_data['edit_field'] = query.data
     logger.info(f"User {update.effective_user.id} chose to edit field: {query.data}")
@@ -524,20 +528,20 @@ async def receive_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE)
         question_id = context.user_data['edit_question_id']
         guide["questions"] = [q for q in guide["questions"] if q["id"] != question_id]
         save_guide(guide)
-        context.user_data.clear()  # Очищаем user_data
+        context.user_data.clear()
         context.user_data['conversation_state'] = 'POINT_DELETED'
-        await query.message.reply_text("🗑️ Пункт удалён!", reply_markup=MAIN_MENU)
+        query.message.reply_text("🗑️ Пункт удалён!", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     field = "вопрос" if query.data == 'edit_field_question' else "ответ" if query.data == 'edit_field_answer' else "фото/альбом"
     prompt = f"✏️ Введите новый {field}:\n(Напишите /cancel для отмены)"
-    await query.message.reply_text(
+    query.message.reply_text(
         prompt,
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
     )
     return EDIT_VALUE
 
 @restrict_access
-async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def receive_edit_value(update: Update, context: CallbackContext):
     guide = load_guide()
     question_id = context.user_data['edit_question_id']
     field = context.user_data['edit_field']
@@ -551,9 +555,9 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 if update.message.photo:
                     q['photos'] = [update.message.photo[-1].file_id]
                     logger.info(f"User {update.effective_user.id} updated photo(s) for question ID {question_id}: {q['photos']}")
-                    q.pop('photo', None)  # Удаляем старое поле 'photo'
+                    q.pop('photo', None)
                 else:
-                    await update.message.reply_text(
+                    update.message.reply_text(
                         "❌ Пожалуйста, отправьте фото или альбом!\n(Напишите /cancel для отмены)",
                         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
                     )
@@ -561,9 +565,9 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
             break
     save_guide(guide)
     logger.info(f"User {update.effective_user.id} updated {field} for question ID {question_id}")
-    context.user_data.clear()  # Очищаем user_data
+    context.user_data.clear()
     context.user_data['conversation_state'] = 'EDIT_VALUE'
-    await update.message.reply_text(
+    update.message.reply_text(
         f"✏️ {field.replace('edit_field_', '').capitalize()} обновлён!",
         reply_markup=MAIN_MENU
     )
@@ -571,84 +575,92 @@ async def receive_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # Обработчик неподдерживаемых сообщений
 @restrict_access
-async def handle_invalid_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_invalid_input(update: Update, context: CallbackContext):
     logger.warning(f"User {update.effective_user.id} sent invalid input in conversation state")
     context.user_data['conversation_state'] = 'INVALID_INPUT'
-    await update.message.reply_text(
+    update.message.reply_text(
         "❌ Пожалуйста, отправьте текст или фото/альбом (для ответа/фото)!\n(Напишите /cancel для отмены)",
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
     )
 
+# Обработчик для отладки текстовых сообщений
+@restrict_access
+def debug_text(update: Update, context: CallbackContext):
+    logger.info(f"User {update.effective_user.id} sent text: '{update.message.text}'")
+    if Filters.regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$').match(update.message):
+        logger.info(f"User {update.effective_user.id} sent menu command: '{update.message.text}', skipping perform_search")
+        return
+    perform_search(update, context)
+
 # Запуск бота
-async def main():
-    application = Application.builder().token(os.getenv("BOT_TOKEN")).build()
-    application.add_error_handler(error_handler)
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(MessageHandler(filters.Regex(r'^📖 Справочник$'), open_guide))
-    application.add_handler(CallbackQueryHandler(show_answer, pattern='^question_.*$'))
-    application.add_handler(CallbackQueryHandler(handle_pagination, pattern='^page_.*$'))
+def main():
+    updater = Updater(os.getenv("BOT_TOKEN"), use_context=True)
+    dp = updater.dispatcher
+    dp.add_error_handler(error_handler)
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("cancel", cancel))
+    dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
     add_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(r'^➕ Добавить пункт$'), add_point)],
+        entry_points=[MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point)],
         states={
             QUESTION: [
                 MessageHandler(
-                    filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$'),
                     receive_question
                 ),
             ],
             ANSWER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_answer),
-                MessageHandler(filters.PHOTO, receive_answer) if ENABLE_PHOTOS else None,
-                MessageHandler(~(filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_invalid_input)
+                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(Filters.photo, receive_answer) if ENABLE_PHOTOS else None,
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
             ],
             ANSWER_PHOTOS: [
-                MessageHandler(filters.PHOTO, receive_answer_photos) if ENABLE_PHOTOS else None,
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_answer),
-                MessageHandler(~(filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_invalid_input)
+                MessageHandler(Filters.photo, receive_answer_photos) if ENABLE_PHOTOS else None,
+                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
         per_chat=True,
-        allow_reentry=False  # Отключаем повторный вход
+        allow_reentry=True
     )
-    application.add_handler(add_conv)
+    dp.add_handler(add_conv)
     edit_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(r'^✏️ Редактировать пункт$'), edit_point)],
+        entry_points=[MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point)],
         states={
             EDIT_QUESTION: [
                 CallbackQueryHandler(select_edit_question, pattern='^edit_question_.*$'),
                 CallbackQueryHandler(handle_edit_pagination, pattern='^(edit_page_.*|cancel_edit)$')
             ],
-            EDIT_FIELD: [CallbackQueryHandler(receive_edit_field, pattern='^(edit_field_.*|cancel_edit)$')],
+            EDIT_FIELD: [
+                CallbackQueryHandler(receive_edit_field, pattern='^(edit_field_.*|cancel_edit)$')
+            ],
             EDIT_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_edit_value),
-                MessageHandler(filters.PHOTO, receive_edit_value) if ENABLE_PHOTOS else None,
-                MessageHandler(~(filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_invalid_input)
+                MessageHandler(Filters.text & ~Filters.command, receive_edit_value),
+                MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
         per_chat=True,
-        allow_reentry=True  # Разрешаем повторный вход для редактирования
+        per_message=False,
+        allow_reentry=True
     )
-    application.add_handler(edit_conv)
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$'),
-        perform_search
-    ))
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
+    dp.add_handler(edit_conv)
+    dp.add_handler(CallbackQueryHandler(handle_pagination, pattern='^page_.*$'))
+    dp.add_handler(CallbackQueryHandler(show_answer, pattern='^question_.*$'))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, debug_text))
+
     logger.info("Bot is running...")
-    # Keep the bot running until interrupted
-    try:
-        while True:
-            await asyncio.sleep(3600)  # Sleep for an hour to keep the event loop alive
-    except KeyboardInterrupt:
-        await application.stop()
-        await application.updater.stop()
+    updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    updater.idle()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Received KeyboardInterrupt, shutting down...")
+    except Exception as e:
+        logger.error(f"Error running bot: {e}")
