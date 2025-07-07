@@ -180,35 +180,59 @@ def open_guide(update: Update, context: CallbackContext):
 
 # Отображение страницы справочника
 def display_guide_page(update: Update, context: CallbackContext, guide, page):
-    ITEMS_PER_PAGE = 15
-    total_items = len(guide["questions"])
-    total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
-    page = max(0, min(page, total_pages - 1))
-    context.user_data['page'] = page
-    context.user_data['guide'] = guide
+    try:
+        ITEMS_PER_PAGE = 15
+        total_items = len(guide["questions"])
+        total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+        page = max(0, min(page, total_pages - 1))
+        context.user_data['page'] = page
+        context.user_data['guide'] = guide
 
-    start_idx = page * ITEMS_PER_PAGE
-    end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
-    questions = guide["questions"][start_idx:end_idx]
+        start_idx = page * ITEMS_PER_PAGE
+        end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
+        questions = guide["questions"][start_idx:end_idx]
 
-    keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'question_{q["id"]}')] for q in questions]
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'page_{page-1}'))
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'page_{page+1}'))
-    if nav_buttons:
-        keyboard.append(nav_buttons)
+        keyboard = []
+        for q in questions:
+            if not isinstance(q, dict) or "question" not in q or "id" not in q:
+                logger.error(f"Invalid question data: {q}")
+                continue
+            question_text = q["question"][:100] if len(q["question"]) > 100 else q["question"]
+            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'question_{q["id"]}')])
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    text = f"📖 Справочник (страница {page + 1}/{total_pages}):"
-    if update.message:
-        update.message.reply_text(text, reply_markup=reply_markup)
-    elif update.callback_query:
-        update.callback_query.message.edit_text(text, reply_markup=reply_markup)
-    logger.info(f"User {update.effective_user.id} viewed guide page {page + 1}")
-    context.user_data['conversation_state'] = 'GUIDE_PAGE'
-    return ConversationHandler.END
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'page_{page-1}'))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'page_{page+1}'))
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"📖 Справочник (страница {page + 1}/{total_pages}):"
+
+        if update.message:
+            update.message.reply_text(text, reply_markup=reply_markup)
+        elif update.callback_query:
+            update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+
+        logger.info(f"User {update.effective_user.id} viewed guide page {page + 1}")
+        context.user_data['conversation_state'] = 'GUIDE_PAGE'
+        return ConversationHandler.END
+
+    except Exception as e:
+        logger.error(f"Error in display_guide_page for user {update.effective_user.id}: {str(e)}", exc_info=True)
+        if update.message:
+            update.message.reply_text(
+                "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
+                reply_markup=MAIN_MENU
+            )
+        elif update.callback_query:
+            update.callback_query.message.reply_text(
+                "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
+                reply_markup=MAIN_MENU
+            )
+        return ConversationHandler.END
 
 # Показ ответа
 @restrict_access
@@ -255,21 +279,60 @@ def handle_pagination(update: Update, context: CallbackContext):
 # Поиск по ключевым словам
 @restrict_access
 def perform_search(update: Update, context: CallbackContext):
-    keyword = update.message.text.lower()
-    logger.info(f"User {update.effective_user.id} searched for '{keyword}'")
-    guide = load_guide()
-    results = [q for q in guide["questions"] if keyword in q["question"].lower() or keyword in q["answer"].lower()]
-    if not results:
+    try:
+        # Проверка ввода
+        if not update.message or not update.message.text:
+            logger.error(f"User {update.effective_user.id} sent empty or invalid message for search")
+            update.message.reply_text(
+                "❌ Пожалуйста, введите ключевое слово для поиска!",
+                reply_markup=MAIN_MENU
+            )
+            return ConversationHandler.END
+
+        keyword = update.message.text.lower().strip()
+        logger.info(f"User {update.effective_user.id} searched for '{keyword}'")
+
+        # Загрузка данных
+        guide = load_guide()
+        if not isinstance(guide, dict) or "questions" not in guide or not isinstance(guide["questions"], list):
+            logger.error("Invalid guide.json structure")
+            update.message.reply_text(
+                "❌ Ошибка: Неверная структура файла guide.json. Свяжитесь с администратором.",
+                reply_markup=MAIN_MENU
+            )
+            return ConversationHandler.END
+
+        # Поиск совпадений
+        results = [
+            q for q in guide["questions"]
+            if isinstance(q, dict) and
+            "question" in q and isinstance(q["question"], str) and
+            "answer" in q and isinstance(q["answer"], str) and
+            (keyword in q["question"].lower() or keyword in q["answer"].lower())
+        ]
+
+        if not results:
+            logger.info(f"No results found for keyword '{keyword}'")
+            update.message.reply_text(
+                "🔍 Ничего не найдено. Попробуйте другое ключевое слово!",
+                reply_markup=MAIN_MENU
+            )
+            return ConversationHandler.END
+
+        # Сохранение результатов и отображение
+        context.user_data['guide'] = {"questions": results}
+        context.user_data['page'] = 0
+        context.user_data['conversation_state'] = 'SEARCH'
+        display_guide_page(update, context, {"questions": results}, 0)
+        return ConversationHandler.END
+
+    except Exception as e:
+        logger.error(f"Error in perform_search for user {update.effective_user.id}: {str(e)}", exc_info=True)
         update.message.reply_text(
-            "🔍 Ничего не найдено. Попробуйте другое ключевое слово!",
+            "❌ Произошла ошибка при поиске. Попробуйте снова или свяжитесь с администратором.",
             reply_markup=MAIN_MENU
         )
-        return
-    context.user_data['guide'] = {"questions": results}
-    context.user_data['page'] = 0
-    display_guide_page(update, context, {"questions": results}, 0)
-    context.user_data['conversation_state'] = 'SEARCH'
-    return ConversationHandler.END
+        return ConversationHandler.END
 
 # Добавление пункта
 @restrict_access
@@ -587,9 +650,17 @@ def handle_invalid_input(update: Update, context: CallbackContext):
 @restrict_access
 def debug_text(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} sent text: '{update.message.text}'")
+    # Проверка, находится ли пользователь в диалоге ConversationHandler
+    current_state = context.user_data.get('conversation_state', 'NONE')
+    if current_state in ['ADD_POINT', 'RECEIVE_QUESTION', 'RECEIVE_ANSWER', 'ANSWER_PHOTOS',
+                         'EDIT_POINT', 'EDIT_PAGE', 'SELECT_EDIT_QUESTION', 'RECEIVE_EDIT_FIELD', 'EDIT_VALUE']:
+        logger.info(f"User {update.effective_user.id} is in conversation state {current_state}, skipping perform_search")
+        return
+    # Игнорируем команды меню
     if Filters.regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$').match(update.message):
         logger.info(f"User {update.effective_user.id} sent menu command: '{update.message.text}', skipping perform_search")
         return
+    # Перенаправляем на поиск
     perform_search(update, context)
 
 # Запуск бота
@@ -651,6 +722,7 @@ def main():
     dp.add_handler(edit_conv)
     dp.add_handler(CallbackQueryHandler(handle_pagination, pattern='^page_.*$'))
     dp.add_handler(CallbackQueryHandler(show_answer, pattern='^question_.*$'))
+    # Перемещаем debug_text в конец, чтобы он обрабатывал текст после ConversationHandler
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, debug_text))
 
     logger.info("Bot is running...")
