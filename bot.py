@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import logging
+import re
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
@@ -117,10 +118,12 @@ def restrict_access(func):
 
 # Обработчик ошибок
 def error_handler(update: Update, context: CallbackContext):
-    logger.error(f"Update {update} caused error: {context.error}")
+    logger.error(f"Update {update} caused error: {context.error}", exc_info=True)
     logger.info(f"Current conversation state: {context.user_data.get('conversation_state', 'None')}")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'ERROR'
+    if hasattr(context, 'dispatcher') and hasattr(context.dispatcher, 'update_persistence'):
+        context.dispatcher.update_persistence()
     if update.message:
         update.message.reply_text(
             "❌ Произошла ошибка. Попробуйте снова или свяжитесь с администратором.",
@@ -139,6 +142,7 @@ def start(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} started the bot")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'START'
+    context.user_data['conversation_active'] = False
     update.message.reply_text(
         "Добро пожаловать в справочник техподдержки РЭСТ! 📋\nВыберите действие:",
         reply_markup=MAIN_MENU
@@ -155,6 +159,9 @@ def cancel(update: Update, context: CallbackContext):
         logger.info(f"User {update.effective_user.id} cancelled timeout task")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'CANCELLED'
+    context.user_data['conversation_active'] = False
+    if hasattr(context, 'dispatcher') and hasattr(context.dispatcher, 'update_persistence'):
+        context.dispatcher.update_persistence()
     update.message.reply_text(
         "🚪 Диалог отменён. Выберите действие:",
         reply_markup=MAIN_MENU
@@ -167,6 +174,7 @@ def open_guide(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} opened the guide")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'OPEN_GUIDE'
+    context.user_data['conversation_active'] = False
     guide = load_guide()
     if not guide["questions"]:
         update.message.reply_text(
@@ -218,6 +226,7 @@ def display_guide_page(update: Update, context: CallbackContext, guide, page):
 
         logger.info(f"User {update.effective_user.id} viewed guide page {page + 1}")
         context.user_data['conversation_state'] = 'GUIDE_PAGE'
+        context.user_data['conversation_active'] = False
         return ConversationHandler.END
 
     except Exception as e:
@@ -263,6 +272,7 @@ def show_answer(update: Update, context: CallbackContext):
         query.message.reply_text("❌ Вопрос не найден!", reply_markup=MAIN_MENU)
     context.user_data.clear()
     context.user_data['conversation_state'] = 'SHOW_ANSWER'
+    context.user_data['conversation_active'] = False
     return ConversationHandler.END
 
 # Обработка пагинации
@@ -274,13 +284,14 @@ def handle_pagination(update: Update, context: CallbackContext):
     guide = context.user_data.get('guide', load_guide())
     display_guide_page(update, context, guide, page)
     context.user_data['conversation_state'] = 'PAGINATION'
+    context.user_data['conversation_active'] = False
     return ConversationHandler.END
 
 # Поиск по ключевым словам
 @restrict_access
 def perform_search(update: Update, context: CallbackContext):
     try:
-        # Проверка ввода
+        logger.info(f"User {update.effective_user.id} entered perform_search with text: '{update.message.text}'")
         if not update.message or not update.message.text:
             logger.error(f"User {update.effective_user.id} sent empty or invalid message for search")
             update.message.reply_text(
@@ -292,7 +303,6 @@ def perform_search(update: Update, context: CallbackContext):
         keyword = update.message.text.lower().strip()
         logger.info(f"User {update.effective_user.id} searched for '{keyword}'")
 
-        # Загрузка данных
         guide = load_guide()
         if not isinstance(guide, dict) or "questions" not in guide or not isinstance(guide["questions"], list):
             logger.error("Invalid guide.json structure")
@@ -302,7 +312,6 @@ def perform_search(update: Update, context: CallbackContext):
             )
             return ConversationHandler.END
 
-        # Поиск совпадений
         results = [
             q for q in guide["questions"]
             if isinstance(q, dict) and
@@ -319,15 +328,18 @@ def perform_search(update: Update, context: CallbackContext):
             )
             return ConversationHandler.END
 
-        # Сохранение результатов и отображение
         context.user_data['guide'] = {"questions": results}
         context.user_data['page'] = 0
         context.user_data['conversation_state'] = 'SEARCH'
+        context.user_data['conversation_active'] = False
         display_guide_page(update, context, {"questions": results}, 0)
         return ConversationHandler.END
 
     except Exception as e:
         logger.error(f"Error in perform_search for user {update.effective_user.id}: {str(e)}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
         update.message.reply_text(
             "❌ Произошла ошибка при поиске. Попробуйте снова или свяжитесь с администратором.",
             reply_markup=MAIN_MENU
@@ -346,6 +358,7 @@ def add_point(update: Update, context: CallbackContext):
     context.user_data['loading_message_id'] = None
     context.user_data['timeout_task'] = None
     context.user_data['conversation_state'] = 'ADD_POINT'
+    context.user_data['conversation_active'] = True
     try:
         update.message.reply_text(
             "➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
@@ -353,7 +366,10 @@ def add_point(update: Update, context: CallbackContext):
         )
         logger.info(f"User {update.effective_user.id} successfully triggered add_point")
     except Exception as e:
-        logger.error(f"Error in add_point for user {update.effective_user.id}: {e}")
+        logger.error(f"Error in add_point for user {update.effective_user.id}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
         update.message.reply_text(
             "❌ Ошибка при добавлении пункта. Попробуйте снова.",
             reply_markup=MAIN_MENU
@@ -363,14 +379,17 @@ def add_point(update: Update, context: CallbackContext):
 
 @restrict_access
 def receive_question(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} entered question: {update.message.text}")
-    if context.user_data.get('conversation_state') != 'ADD_POINT':
-        logger.warning(f"Unexpected question input from user {update.effective_user.id} in state {context.user_data.get('conversation_state')}")
+    if not context.user_data.get('conversation_active', False):
+        logger.warning(f"User {update.effective_user.id} attempted to provide question in inactive conversation")
         update.message.reply_text(
             "❌ Пожалуйста, начните добавление пункта заново (нажмите '➕ Добавить пункт').",
             reply_markup=MAIN_MENU
         )
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'INVALID_QUESTION'
+        context.user_data['conversation_active'] = False
         return ConversationHandler.END
+    logger.info(f"User {update.effective_user.id} entered question: {update.message.text}")
     context.user_data['new_question'] = update.message.text
     context.user_data['conversation_state'] = 'RECEIVE_QUESTION'
     prompt = "Введите подсказку для решения"
@@ -385,6 +404,16 @@ def receive_question(update: Update, context: CallbackContext):
 
 @restrict_access
 def receive_answer(update: Update, context: CallbackContext):
+    if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
+        logger.warning(f"User {update.effective_user.id} attempted to provide answer without active conversation or question")
+        update.message.reply_text(
+            "❌ Пожалуйста, начните добавление пункта заново (нажмите '➕ Добавить пункт').",
+            reply_markup=MAIN_MENU
+        )
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'INVALID_ANSWER'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
     context.user_data['answer'] = update.message.caption if update.message.photo else update.message.text if update.message.text else ""
     context.user_data['conversation_state'] = 'RECEIVE_ANSWER'
     if ENABLE_PHOTOS and update.message.photo:
@@ -408,6 +437,7 @@ def receive_answer(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} ending add_conv in receive_answer")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'POINT_SAVED'
+    context.user_data['conversation_active'] = False
     return ConversationHandler.END
 
 def check_album_timeout(context: CallbackContext):
@@ -429,6 +459,7 @@ def check_album_timeout(context: CallbackContext):
         logger.info(f"User {update.effective_user.id} ending add_conv in check_album_timeout")
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ALBUM_SAVED'
+        context.user_data['conversation_active'] = False
         return ConversationHandler.END
     return None
 
@@ -458,6 +489,16 @@ def save_new_point(update: Update, context: CallbackContext, send_message: bool 
 
 @restrict_access
 def receive_answer_photos(update: Update, context: CallbackContext):
+    if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
+        logger.warning(f"User {update.effective_user.id} attempted to provide photos without active conversation or question")
+        update.message.reply_text(
+            "❌ Пожалуйста, начните добавление пункта заново (нажмите '➕ Добавить пункт').",
+            reply_markup=MAIN_MENU
+        )
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'INVALID_PHOTOS'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
     if update.message.media_group_id == context.user_data.get('media_group_id'):
         context.user_data['photos'].append(update.message.photo[-1].file_id)
         context.user_data['last_photo_time'] = update.message.date
@@ -487,6 +528,7 @@ def receive_answer_photos(update: Update, context: CallbackContext):
         logger.info(f"User {update.effective_user.id} ending add_conv in receive_answer_photos")
         context.user_data.clear()
         context.user_data['conversation_state'] = 'PHOTOS_SAVED'
+        context.user_data['conversation_active'] = False
         return ConversationHandler.END
     return ANSWER_PHOTOS
 
@@ -495,12 +537,14 @@ def edit_point(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} started editing a point")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'EDIT_POINT'
+    context.user_data['conversation_active'] = True
     guide = load_guide()
     if not guide["questions"]:
         update.message.reply_text(
             "📖 Справочник пуст. Нечего редактировать! ➕",
             reply_markup=MAIN_MENU
         )
+        context.user_data['conversation_active'] = False
         return ConversationHandler.END
     context.user_data['guide'] = guide
     context.user_data['page'] = 0
@@ -537,9 +581,8 @@ def display_edit_page(update: Update, context: CallbackContext, guide, page):
         update.callback_query.message.edit_text(text, reply_markup=reply_markup)
     logger.info(f"User {update.effective_user.id} viewed edit page {page + 1}")
     context.user_data['conversation_state'] = 'EDIT_PAGE'
-    return ConversationHandler.END
+    return EDIT_QUESTION
 
-# Обработка пагинации для редактирования
 @restrict_access
 def handle_edit_pagination(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -547,6 +590,7 @@ def handle_edit_pagination(update: Update, context: CallbackContext):
     if query.data == 'cancel_edit':
         context.user_data.clear()
         context.user_data['conversation_state'] = 'CANCEL_EDIT'
+        context.user_data['conversation_active'] = False
         query.message.reply_text("🚪 Редактирование отменено.", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     page = int(query.data.split('_')[2])
@@ -581,6 +625,7 @@ def receive_edit_field(update: Update, context: CallbackContext):
     if query.data == 'cancel_edit':
         context.user_data.clear()
         context.user_data['conversation_state'] = 'CANCEL_EDIT'
+        context.user_data['conversation_active'] = False
         query.message.reply_text("🚪 Редактирование отменено.", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     context.user_data['edit_field'] = query.data
@@ -593,6 +638,7 @@ def receive_edit_field(update: Update, context: CallbackContext):
         save_guide(guide)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'POINT_DELETED'
+        context.user_data['conversation_active'] = False
         query.message.reply_text("🗑️ Пункт удалён!", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     field = "вопрос" if query.data == 'edit_field_question' else "ответ" if query.data == 'edit_field_answer' else "фото/альбом"
@@ -605,6 +651,16 @@ def receive_edit_field(update: Update, context: CallbackContext):
 
 @restrict_access
 def receive_edit_value(update: Update, context: CallbackContext):
+    if not context.user_data.get('conversation_active', False):
+        logger.warning(f"User {update.effective_user.id} attempted to provide edit value in inactive conversation")
+        update.message.reply_text(
+            "❌ Пожалуйста, начните редактирование заново (нажмите '✏️ Редактировать пункт').",
+            reply_markup=MAIN_MENU
+        )
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'INVALID_EDIT_VALUE'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
     guide = load_guide()
     question_id = context.user_data['edit_question_id']
     field = context.user_data['edit_field']
@@ -624,12 +680,13 @@ def receive_edit_value(update: Update, context: CallbackContext):
                         "❌ Пожалуйста, отправьте фото или альбом!\n(Напишите /cancel для отмены)",
                         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
                     )
-                    return
+                    return EDIT_VALUE
             break
     save_guide(guide)
     logger.info(f"User {update.effective_user.id} updated {field} for question ID {question_id}")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'EDIT_VALUE'
+    context.user_data['conversation_active'] = False
     update.message.reply_text(
         f"✏️ {field.replace('edit_field_', '').capitalize()} обновлён!",
         reply_markup=MAIN_MENU
@@ -640,27 +697,31 @@ def receive_edit_value(update: Update, context: CallbackContext):
 @restrict_access
 def handle_invalid_input(update: Update, context: CallbackContext):
     logger.warning(f"User {update.effective_user.id} sent invalid input in conversation state")
+    context.user_data.clear()
     context.user_data['conversation_state'] = 'INVALID_INPUT'
+    context.user_data['conversation_active'] = False
     update.message.reply_text(
         "❌ Пожалуйста, отправьте текст или фото/альбом (для ответа/фото)!\n(Напишите /cancel для отмены)",
-        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+        reply_markup=MAIN_MENU
     )
+    return ConversationHandler.END
 
 # Обработчик для отладки текстовых сообщений
 @restrict_access
 def debug_text(update: Update, context: CallbackContext):
     logger.info(f"User {update.effective_user.id} sent text: '{update.message.text}'")
-    # Проверка, находится ли пользователь в диалоге ConversationHandler
     current_state = context.user_data.get('conversation_state', 'NONE')
-    if current_state in ['ADD_POINT', 'RECEIVE_QUESTION', 'RECEIVE_ANSWER', 'ANSWER_PHOTOS',
-                         'EDIT_POINT', 'EDIT_PAGE', 'SELECT_EDIT_QUESTION', 'RECEIVE_EDIT_FIELD', 'EDIT_VALUE']:
-        logger.info(f"User {update.effective_user.id} is in conversation state {current_state}, skipping perform_search")
+    logger.info(f"Current conversation state: {current_state}")
+    if context.user_data.get('conversation_active', False):
+        logger.info(f"User {update.effective_user.id} is in active conversation state {current_state}, skipping perform_search")
         return
-    # Игнорируем команды меню
-    if Filters.regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$').match(update.message):
+    menu_pattern = r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$'
+    if re.match(menu_pattern, update.message.text):
         logger.info(f"User {update.effective_user.id} sent menu command: '{update.message.text}', skipping perform_search")
         return
-    # Перенаправляем на поиск
+    context.user_data.clear()
+    context.user_data['conversation_state'] = 'SEARCH'
+    context.user_data['conversation_active'] = False
     perform_search(update, context)
 
 # Запуск бота
@@ -669,7 +730,7 @@ def main():
     dp = updater.dispatcher
     dp.add_error_handler(error_handler)
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("cancel", cancel))
+    dp.add_handler(CommandHandler("cancel", cancel))  # Глобальный /cancel
     dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
     add_conv = ConversationHandler(
         entry_points=[MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point)],
@@ -681,20 +742,26 @@ def main():
                 ),
             ],
             ANSWER: [
-                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(
+                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    receive_answer
+                ),
                 MessageHandler(Filters.photo, receive_answer) if ENABLE_PHOTOS else None,
                 MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
             ],
             ANSWER_PHOTOS: [
                 MessageHandler(Filters.photo, receive_answer_photos) if ENABLE_PHOTOS else None,
-                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(
+                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    receive_answer
+                ),
                 MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
             ]
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[],
         per_user=True,
         per_chat=True,
-        allow_reentry=True
+        allow_reentry=False
     )
     dp.add_handler(add_conv)
     edit_conv = ConversationHandler(
@@ -708,21 +775,23 @@ def main():
                 CallbackQueryHandler(receive_edit_field, pattern='^(edit_field_.*|cancel_edit)$')
             ],
             EDIT_VALUE: [
-                MessageHandler(Filters.text & ~Filters.command, receive_edit_value),
+                MessageHandler(
+                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    receive_edit_value
+                ),
                 MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
                 MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
             ]
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[],
         per_user=True,
         per_chat=True,
         per_message=False,
-        allow_reentry=True
+        allow_reentry=False
     )
     dp.add_handler(edit_conv)
     dp.add_handler(CallbackQueryHandler(handle_pagination, pattern='^page_.*$'))
     dp.add_handler(CallbackQueryHandler(show_answer, pattern='^question_.*$'))
-    # Перемещаем debug_text в конец, чтобы он обрабатывал текст после ConversationHandler
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, debug_text))
 
     logger.info("Bot is running...")
@@ -735,4 +804,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logger.info("Received KeyboardInterrupt, shutting down...")
     except Exception as e:
-        logger.error(f"Error running bot: {e}")
+        logger.error(f"Error running bot: {e}", exc_info=True)
