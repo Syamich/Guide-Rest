@@ -58,23 +58,11 @@
     },
     {
       "id": 14,
-      "question": "тест",
-      "answer": "тест"
-    },
-    {
-      "id": 15,
-      "question": "тест2",
-      "answer": "тест2"
-    },
-    {
-      "id": 16,
-      "question": "тест3",
-      "answer": "тест3"
-    },
-    {
-      "id": 17,
-      "question": "тест4",
-      "answer": "тест4"
+      "question": "Ошибка природы",
+      "answer": "Глебати",
+      "photos": [
+        "AgACAgIAAxkBAAIFLmhtFUN4g5-09jpUaWjflfie0tawAAKd_jEbYGlpS-e4SnDVtofnAQADAgADeQADNgQ"
+      ]
     }
   ]
 }
