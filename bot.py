@@ -32,10 +32,10 @@ if not os.getenv("BOT_TOKEN"):
 ENABLE_PHOTOS = True  # Установи False, чтобы отключить фотографии
 
 # Состояния для ConversationHandler
-QUESTION, ANSWER, ANSWER_PHOTOS = range(3)
-EDIT_QUESTION, EDIT_FIELD, EDIT_VALUE = range(3, 6)
+GUIDE_QUESTION, GUIDE_ANSWER, GUIDE_ANSWER_PHOTOS = range(3)
+GUIDE_EDIT_QUESTION, GUIDE_EDIT_FIELD, GUIDE_EDIT_VALUE = range(3, 6)
 TEMPLATE_QUESTION, TEMPLATE_ANSWER, TEMPLATE_ANSWER_PHOTOS = range(6, 9)
-EDIT_TEMPLATE_QUESTION, EDIT_TEMPLATE_FIELD, EDIT_TEMPLATE_VALUE = range(9, 12)
+TEMPLATE_EDIT_QUESTION, TEMPLATE_EDIT_FIELD, TEMPLATE_EDIT_VALUE = range(9, 12)
 
 # Постоянное клавиатурное меню
 MAIN_MENU = ReplyKeyboardMarkup(
@@ -186,40 +186,54 @@ def cancel(update: Update, context: CallbackContext):
     )
     return ConversationHandler.END
 
-# Открытие справочника или шаблонов с пагинацией
+# Открытие справочника
 @restrict_access
-def open_data(update: Update, context: CallbackContext, data_type: str):
-    logger.info(f"User {update.effective_user.id} opened {data_type}")
+def open_guide(update: Update, context: CallbackContext):
+    logger.info(f"User {update.effective_user.id} opened guide")
     context.user_data.clear()
-    context.user_data['conversation_state'] = f'OPEN_{data_type.upper()}'
+    context.user_data['conversation_state'] = 'OPEN_GUIDE'
     context.user_data['conversation_active'] = False
-    context.user_data['data_type'] = data_type
-    data = load_data(data_type)
-    key = 'questions' if data_type == 'guide' else 'templates'
-    if not data[key]:
+    context.user_data['data_type'] = 'guide'
+    guide = load_guide()
+    if not guide["questions"]:
         update.message.reply_text(
-            f"{'📖 Справочник' if data_type == 'guide' else '📋 Шаблоны ответов'} пуст. Добавьте первый пункт! ➕",
+            "📖 Справочник пуст. Добавьте первый пункт! ➕",
             reply_markup=MAIN_MENU
         )
         return ConversationHandler.END
     page = context.user_data.get('page', 0)
-    display_guide_page(update, context, data, page, data_type)
+    display_guide_page(update, context, guide, page, 'guide')
     return ConversationHandler.END
 
-@restrict_access
-def open_guide(update: Update, context: CallbackContext):
-    return open_data(update, context, 'guide')
-
+# Открытие шаблонов
 @restrict_access
 def open_templates(update: Update, context: CallbackContext):
-    return open_data(update, context, 'template')
+    logger.info(f"User {update.effective_user.id} opened templates")
+    context.user_data.clear()
+    context.user_data['conversation_state'] = 'OPEN_TEMPLATE'
+    context.user_data['conversation_active'] = False
+    context.user_data['data_type'] = 'template'
+    templates = load_templates()
+    if not templates["templates"]:
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить шаблон", callback_data='add_template')],
+            [InlineKeyboardButton("🚪 Вернуться в меню", callback_data='cancel_template')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        update.message.reply_text(
+            "📋 Шаблоны ответов пусты. Добавьте первый шаблон!",
+            reply_markup=reply_markup
+        )
+        return ConversationHandler.END
+    page = context.user_data.get('page', 0)
+    display_template_page(update, context, templates, page)
+    return ConversationHandler.END
 
-# Отображение страницы справочника или шаблонов
+# Отображение страницы справочника
 def display_guide_page(update: Update, context: CallbackContext, data, page, data_type: str):
     try:
         ITEMS_PER_PAGE = 15
-        key = 'questions' if data_type == 'guide' else 'templates'
-        total_items = len(data[key])
+        total_items = len(data["questions"])
         total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
         page = max(0, min(page, total_pages - 1))
         context.user_data['page'] = page
@@ -228,47 +242,108 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
 
         start_idx = page * ITEMS_PER_PAGE
         end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
-        items = data[key][start_idx:end_idx]
+        items = data["questions"][start_idx:end_idx]
 
         keyboard = []
         for item in items:
             if not isinstance(item, dict) or "question" not in item or "id" not in item:
-                logger.error(f"Invalid {data_type} data: {item}")
+                logger.error(f"Invalid guide data: {item}")
                 continue
             question_text = item["question"][:100] if len(item["question"]) > 100 else item["question"]
-            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'{data_type}_question_{item["id"]}')])
+            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'guide_question_{item["id"]}')])
 
         nav_buttons = []
         if page > 0:
-            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'{data_type}_page_{page-1}'))
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'guide_page_{page-1}'))
         if page < total_pages - 1:
-            nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'{data_type}_page_{page+1}'))
-        if nav_buttons:
-            keyboard.append(nav_buttons)
+            nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'guide_page_{page+1}'))
+        keyboard.append(nav_buttons)
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        text = f"{'📖 Справочник' if data_type == 'guide' else '📋 Шаблоны ответов'} (страница {page + 1}/{total_pages}):"
+        text = f"📖 Справочник (страница {page + 1}/{total_pages}):"
 
         if update.message:
             update.message.reply_text(text, reply_markup=reply_markup)
         elif update.callback_query:
             update.callback_query.message.edit_text(text, reply_markup=reply_markup)
 
-        logger.info(f"User {update.effective_user.id} viewed {data_type} page {page + 1}")
-        context.user_data['conversation_state'] = f'{data_type.upper()}_PAGE'
+        logger.info(f"User {update.effective_user.id} viewed guide page {page + 1}")
+        context.user_data['conversation_state'] = 'GUIDE_PAGE'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"Error in display_guide_page for user {update.effective_user.id}, data_type {data_type}: {str(e)}", exc_info=True)
+        logger.error(f"Error in display_guide_page for user {update.effective_user.id}: {str(e)}", exc_info=True)
         if update.message:
             update.message.reply_text(
-                f"❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
+                "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
                 reply_markup=MAIN_MENU
             )
         elif update.callback_query:
             update.callback_query.message.reply_text(
-                f"❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
+                "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
+                reply_markup=MAIN_MENU
+            )
+        return ConversationHandler.END
+
+# Отображение страницы шаблонов
+def display_template_page(update: Update, context: CallbackContext, data, page):
+    try:
+        ITEMS_PER_PAGE = 15
+        total_items = len(data["templates"])
+        total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+        page = max(0, min(page, total_pages - 1))
+        context.user_data['page'] = page
+        context.user_data['data'] = data
+        context.user_data['data_type'] = 'template'
+
+        start_idx = page * ITEMS_PER_PAGE
+        end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
+        items = data["templates"][start_idx:end_idx]
+
+        keyboard = []
+        for item in items:
+            if not isinstance(item, dict) or "question" not in item or "id" not in item:
+                logger.error(f"Invalid template data: {item}")
+                continue
+            question_text = item["question"][:100] if len(item["question"]) > 100 else item["question"]
+            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'template_question_{item["id"]}')])
+
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'template_page_{page-1}'))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'template_page_{page+1}'))
+        nav_buttons.extend([
+            InlineKeyboardButton("➕ Добавить шаблон", callback_data='add_template'),
+            InlineKeyboardButton("✏️ Редактировать шаблон", callback_data='edit_template'),
+            InlineKeyboardButton("🚪 Вернуться в меню", callback_data='cancel_template')
+        ])
+        keyboard.append(nav_buttons)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"📋 Шаблоны ответов (страница {page + 1}/{total_pages}):"
+
+        if update.message:
+            update.message.reply_text(text, reply_markup=reply_markup)
+        elif update.callback_query:
+            update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+
+        logger.info(f"User {update.effective_user.id} viewed template page {page + 1}")
+        context.user_data['conversation_state'] = 'TEMPLATE_PAGE'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+
+    except Exception as e:
+        logger.error(f"Error in display_template_page for user {update.effective_user.id}: {str(e)}", exc_info=True)
+        if update.message:
+            update.message.reply_text(
+                "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
+                reply_markup=MAIN_MENU
+            )
+        elif update.callback_query:
+            update.callback_query.message.reply_text(
+                "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
                 reply_markup=MAIN_MENU
             )
         return ConversationHandler.END
@@ -315,9 +390,30 @@ def handle_pagination(update: Update, context: CallbackContext):
     data_type, _, page = query.data.split('_')
     page = int(page)
     data = context.user_data.get('data', load_data(data_type))
-    display_guide_page(update, context, data, page, data_type)
+    if data_type == 'guide':
+        display_guide_page(update, context, data, page, data_type)
+    else:
+        display_template_page(update, context, data, page)
     context.user_data['conversation_state'] = f'{data_type.upper()}_PAGINATION'
     context.user_data['conversation_active'] = False
+    return ConversationHandler.END
+
+# Обработка действий с шаблонами
+@restrict_access
+def handle_template_action(update: Update, context: CallbackContext):
+    query = update.callback_query
+    query.answer()
+    action = query.data
+    if action == 'add_template':
+        return add_template(update, context)
+    elif action == 'edit_template':
+        return edit_template(update, context)
+    elif action == 'cancel_template':
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'CANCEL_TEMPLATE'
+        context.user_data['conversation_active'] = False
+        query.message.reply_text("🚪 Вернулись в главное меню.", reply_markup=MAIN_MENU)
+        return ConversationHandler.END
     return ConversationHandler.END
 
 # Поиск по ключевым словам
@@ -380,10 +476,10 @@ def perform_search(update: Update, context: CallbackContext):
         )
         return ConversationHandler.END
 
-# Добавление пункта
+# Добавление пункта в справочник
 @restrict_access
-def add_item(update: Update, context: CallbackContext, data_type: str):
-    logger.info(f"User {update.effective_user.id} started adding a new {data_type}")
+def add_point(update: Update, context: CallbackContext):
+    logger.info(f"User {update.effective_user.id} started adding a new guide point")
     context.user_data.clear()
     context.user_data['photos'] = []
     context.user_data['media_group_id'] = None
@@ -391,41 +487,77 @@ def add_item(update: Update, context: CallbackContext, data_type: str):
     context.user_data['point_saved'] = False
     context.user_data['loading_message_id'] = None
     context.user_data['timeout_task'] = None
-    context.user_data['conversation_state'] = f'ADD_{data_type.upper()}'
+    context.user_data['conversation_state'] = 'ADD_GUIDE'
     context.user_data['conversation_active'] = True
-    context.user_data['data_type'] = data_type
+    context.user_data['data_type'] = 'guide'
     try:
         update.message.reply_text(
-            f"➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
+            "➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
             reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
         )
-        logger.info(f"User {update.effective_user.id} successfully triggered add_{data_type}")
+        logger.info(f"User {update.effective_user.id} successfully triggered add_point")
     except Exception as e:
-        logger.error(f"Error in add_{data_type} for user {update.effective_user.id}: {e}", exc_info=True)
+        logger.error(f"Error in add_point for user {update.effective_user.id}: {e}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
         update.message.reply_text(
-            f"❌ Ошибка при добавлении {'пункта' if data_type == 'guide' else 'шаблона'}. Попробуйте снова.",
+            "❌ Ошибка при добавлении пункта. Попробуйте снова.",
             reply_markup=MAIN_MENU
         )
         return ConversationHandler.END
-    return QUESTION if data_type == 'guide' else TEMPLATE_QUESTION
+    return GUIDE_QUESTION
 
-@restrict_access
-def add_point(update: Update, context: CallbackContext):
-    return add_item(update, context, 'guide')
-
+# Добавление шаблона
 @restrict_access
 def add_template(update: Update, context: CallbackContext):
-    return add_item(update, context, 'template')
+    logger.info(f"User {update.effective_user.id} started adding a new template")
+    context.user_data.clear()
+    context.user_data['photos'] = []
+    context.user_data['media_group_id'] = None
+    context.user_data['last_photo_time'] = None
+    context.user_data['point_saved'] = False
+    context.user_data['loading_message_id'] = None
+    context.user_data['timeout_task'] = None
+    context.user_data['conversation_state'] = 'ADD_TEMPLATE'
+    context.user_data['conversation_active'] = True
+    context.user_data['data_type'] = 'template'
+    try:
+        if update.message:
+            update.message.reply_text(
+                "➕ Введите вопрос для шаблона (например, 'Шаблон ответа на запрос'):\n(Напишите /cancel для отмены)",
+                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+            )
+        elif update.callback_query:
+            update.callback_query.message.reply_text(
+                "➕ Введите вопрос для шаблона (например, 'Шаблон ответа на запрос'):\n(Напишите /cancel для отмены)",
+                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+            )
+        logger.info(f"User {update.effective_user.id} successfully triggered add_template")
+    except Exception as e:
+        logger.error(f"Error in add_template for user {update.effective_user.id}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
+        if update.message:
+            update.message.reply_text(
+                "❌ Ошибка при добавлении шаблона. Попробуйте снова.",
+                reply_markup=MAIN_MENU
+            )
+        elif update.callback_query:
+            update.callback_query.message.reply_text(
+                "❌ Ошибка при добавлении шаблона. Попробуйте снова.",
+                reply_markup=MAIN_MENU
+            )
+        return ConversationHandler.END
+    return TEMPLATE_QUESTION
 
 @restrict_access
 def receive_question(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False):
         logger.warning(f"User {update.effective_user.id} attempted to provide question in inactive conversation")
         update.message.reply_text(
-            f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново (нажмите '{'➕ Добавить пункт' if context.user_data.get('data_type') == 'guide' else '📋 Шаблоны ответов'}').",
+            f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
             reply_markup=MAIN_MENU
         )
         context.user_data.clear()
@@ -444,14 +576,14 @@ def receive_question(update: Update, context: CallbackContext):
         prompt,
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
     )
-    return ANSWER if data_type == 'guide' else TEMPLATE_ANSWER
+    return GUIDE_ANSWER if data_type == 'guide' else TEMPLATE_ANSWER
 
 @restrict_access
 def receive_answer(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
         logger.warning(f"User {update.effective_user.id} attempted to provide answer without active conversation or question")
         update.message.reply_text(
-            f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново (нажмите '{'➕ Добавить пункт' if context.user_data.get('data_type') == 'guide' else '📋 Шаблоны ответов'}').",
+            f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
             reply_markup=MAIN_MENU
         )
         context.user_data.clear()
@@ -474,7 +606,7 @@ def receive_answer(update: Update, context: CallbackContext):
                     context.user_data['timeout_task'] = context.job_queue.run_once(
                         check_album_timeout, 2, context=(update, context)
                     )
-            return ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         else:
             context.user_data['photos'] = [update.message.photo[-1].file_id]
             logger.info(f"User {update.effective_user.id} added single photo to {data_type}: {context.user_data['photos']}")
@@ -540,7 +672,7 @@ def receive_answer_photos(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
         logger.warning(f"User {update.effective_user.id} attempted to provide photos without active conversation or question")
         update.message.reply_text(
-            f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново (нажмите '{'➕ Добавить пункт' if context.user_data.get('data_type') == 'guide' else '📋 Шаблоны ответов'}').",
+            f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
             reply_markup=MAIN_MENU
         )
         context.user_data.clear()
@@ -556,7 +688,7 @@ def receive_answer_photos(update: Update, context: CallbackContext):
             context.user_data['timeout_task'] = context.job_queue.run_once(
                 check_album_timeout, 2, context=(update, context)
             )
-        return ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     if not context.user_data.get('point_saved') and context.user_data.get('photos'):
         logger.info(f"User {update.effective_user.id} finished album for {data_type} media group {context.user_data.get('media_group_id')} due to new message")
         if context.user_data.get('timeout_task'):
@@ -579,76 +711,127 @@ def receive_answer_photos(update: Update, context: CallbackContext):
         context.user_data['conversation_state'] = f'{data_type.upper()}_PHOTOS_SAVED'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
-    return ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+    return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
 
+# Редактирование пункта справочника
 @restrict_access
-def edit_item(update: Update, context: CallbackContext, data_type: str):
-    logger.info(f"User {update.effective_user.id} started editing a {data_type}")
+def edit_point(update: Update, context: CallbackContext):
+    logger.info(f"User {update.effective_user.id} started editing a guide point")
     context.user_data.clear()
-    context.user_data['conversation_state'] = f'EDIT_{data_type.upper()}'
+    context.user_data['conversation_state'] = 'EDIT_GUIDE'
     context.user_data['conversation_active'] = True
-    context.user_data['data_type'] = data_type
-    data = load_data(data_type)
-    key = 'questions' if data_type == 'guide' else 'templates'
-    if not data[key]:
+    context.user_data['data_type'] = 'guide'
+    guide = load_guide()
+    if not guide["questions"]:
         update.message.reply_text(
-            f"{'📖 Справочник' if data_type == 'guide' else '📋 Шаблоны ответов'} пуст. Нечего редактировать! ➕",
+            "📖 Справочник пуст. Нечего редактировать! ➕",
             reply_markup=MAIN_MENU
         )
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
-    context.user_data['data'] = data
+    context.user_data['data'] = guide
     context.user_data['page'] = 0
-    display_edit_page(update, context, data, 0, data_type)
-    return EDIT_QUESTION if data_type == 'guide' else EDIT_TEMPLATE_QUESTION
+    display_guide_edit_page(update, context, guide, 0)
+    return GUIDE_EDIT_QUESTION
 
-@restrict_access
-def edit_point(update: Update, context: CallbackContext):
-    return edit_item(update, context, 'guide')
-
+# Редактирование шаблона
 @restrict_access
 def edit_template(update: Update, context: CallbackContext):
-    return edit_item(update, context, 'template')
+    logger.info(f"User {update.effective_user.id} started editing a template")
+    context.user_data.clear()
+    context.user_data['conversation_state'] = 'EDIT_TEMPLATE'
+    context.user_data['conversation_active'] = True
+    context.user_data['data_type'] = 'template'
+    templates = load_templates()
+    if not templates["templates"]:
+        if update.message:
+            update.message.reply_text(
+                "📋 Шаблоны ответов пусты. Нечего редактировать! ➕",
+                reply_markup=MAIN_MENU
+            )
+        elif update.callback_query:
+            update.callback_query.message.reply_text(
+                "📋 Шаблоны ответов пусты. Нечего редактировать! ➕",
+                reply_markup=MAIN_MENU
+            )
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    context.user_data['data'] = templates
+    context.user_data['page'] = 0
+    display_template_edit_page(update, context, templates, 0)
+    return TEMPLATE_EDIT_QUESTION
 
-# Отображение страницы для редактирования
-def display_edit_page(update: Update, context: CallbackContext, data, page, data_type: str):
+# Отображение страницы редактирования справочника
+def display_guide_edit_page(update: Update, context: CallbackContext, data, page):
     ITEMS_PER_PAGE = 15
-    key = 'questions' if data_type == 'guide' else 'templates'
-    total_items = len(data[key])
+    total_items = len(data["questions"])
     total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
     page = max(0, min(page, total_pages - 1))
     context.user_data['page'] = page
     context.user_data['data'] = data
-    context.user_data['data_type'] = data_type
+    context.user_data['data_type'] = 'guide'
 
     start_idx = page * ITEMS_PER_PAGE
     end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
-    items = data[key][start_idx:end_idx]
+    items = data["questions"][start_idx:end_idx]
 
-    keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'edit_{data_type}_question_{q["id"]}')] for q in items]
+    keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'edit_guide_question_{q["id"]}')] for q in items]
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'edit_{data_type}_page_{page-1}'))
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'edit_guide_page_{page-1}'))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'edit_{data_type}_page_{page+1}'))
-    nav_buttons.append(InlineKeyboardButton("🚪 Отмена", callback_data=f'cancel_{data_type}_edit'))
+        nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'edit_guide_page_{page+1}'))
+    nav_buttons.append(InlineKeyboardButton("🚪 Отмена", callback_data='cancel_guide_edit'))
     keyboard.append(nav_buttons)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    text = f"✏️ Выберите {'вопрос' if data_type == 'guide' else 'шаблон'} для редактирования (страница {page + 1}/{total_pages}):"
+    text = f"✏️ Выберите вопрос для редактирования (страница {page + 1}/{total_pages}):"
     if update.message:
         update.message.reply_text(text, reply_markup=reply_markup)
     elif update.callback_query:
         update.callback_query.message.edit_text(text, reply_markup=reply_markup)
-    logger.info(f"User {update.effective_user.id} viewed {data_type} edit page {page + 1}")
-    context.user_data['conversation_state'] = f'EDIT_{data_type.upper()}_PAGE'
-    return EDIT_QUESTION if data_type == 'guide' else EDIT_TEMPLATE_QUESTION
+    logger.info(f"User {update.effective_user.id} viewed guide edit page {page + 1}")
+    context.user_data['conversation_state'] = 'EDIT_GUIDE_PAGE'
+    return GUIDE_EDIT_QUESTION
+
+# Отображение страницы редактирования шаблонов
+def display_template_edit_page(update: Update, context: CallbackContext, data, page):
+    ITEMS_PER_PAGE = 15
+    total_items = len(data["templates"])
+    total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+    page = max(0, min(page, total_pages - 1))
+    context.user_data['page'] = page
+    context.user_data['data'] = data
+    context.user_data['data_type'] = 'template'
+
+    start_idx = page * ITEMS_PER_PAGE
+    end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
+    items = data["templates"][start_idx:end_idx]
+
+    keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'edit_template_question_{q["id"]}')] for q in items]
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'edit_template_page_{page-1}'))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'edit_template_page_{page+1}'))
+    nav_buttons.append(InlineKeyboardButton("🚪 Отмена", callback_data='cancel_template_edit'))
+    keyboard.append(nav_buttons)
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    text = f"✏️ Выберите шаблон для редактирования (страница {page + 1}/{total_pages}):"
+    if update.message:
+        update.message.reply_text(text, reply_markup=reply_markup)
+    elif update.callback_query:
+        update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+    logger.info(f"User {update.effective_user.id} viewed template edit page {page + 1}")
+    context.user_data['conversation_state'] = 'EDIT_TEMPLATE_PAGE'
+    return TEMPLATE_EDIT_QUESTION
 
 @restrict_access
 def handle_edit_pagination(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
-    data_type = query.data.split('_')[1] if query.data.startswith('edit_') else query.data.split('_')[0]
+    data_type = query.data.split('_')[1]
     if query.data == f'cancel_{data_type}_edit':
         context.user_data.clear()
         context.user_data['conversation_state'] = f'CANCEL_{data_type.upper()}_EDIT'
@@ -657,9 +840,12 @@ def handle_edit_pagination(update: Update, context: CallbackContext):
         return ConversationHandler.END
     page = int(query.data.split('_')[3])
     data = context.user_data.get('data', load_data(data_type))
-    display_edit_page(update, context, data, page, data_type)
+    if data_type == 'guide':
+        display_guide_edit_page(update, context, data, page)
+    else:
+        display_template_edit_page(update, context, data, page)
     context.user_data['conversation_state'] = f'EDIT_{data_type.upper()}_PAGINATION'
-    return EDIT_QUESTION if data_type == 'guide' else EDIT_TEMPLATE_QUESTION
+    return GUIDE_EDIT_QUESTION if data_type == 'guide' else TEMPLATE_EDIT_QUESTION
 
 @restrict_access
 def select_edit_question(update: Update, context: CallbackContext):
@@ -679,7 +865,7 @@ def select_edit_question(update: Update, context: CallbackContext):
     keyboard.append([InlineKeyboardButton("🚪 Отмена", callback_data=f'cancel_{data_type}_edit')])
     reply_markup = InlineKeyboardMarkup(keyboard)
     query.message.reply_text(f"✏️ Что хотите изменить в {'вопросе' if data_type == 'guide' else 'шаблоне'}?", reply_markup=reply_markup)
-    return EDIT_FIELD if data_type == 'guide' else EDIT_TEMPLATE_FIELD
+    return GUIDE_EDIT_FIELD if data_type == 'guide' else TEMPLATE_EDIT_FIELD
 
 @restrict_access
 def receive_edit_field(update: Update, context: CallbackContext):
@@ -712,14 +898,14 @@ def receive_edit_field(update: Update, context: CallbackContext):
         prompt,
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
     )
-    return EDIT_VALUE if data_type == 'guide' else EDIT_TEMPLATE_VALUE
+    return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
 
 @restrict_access
 def receive_edit_value(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False):
         logger.warning(f"User {update.effective_user.id} attempted to provide edit value in inactive conversation")
         update.message.reply_text(
-            f"❌ Пожалуйста, начните редактирование {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново (нажмите '{'✏️ Редактировать пункт' if context.user_data.get('data_type') == 'guide' else '📋 Шаблоны ответов'}').",
+            f"❌ Пожалуйста, начните редактирование {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
             reply_markup=MAIN_MENU
         )
         context.user_data.clear()
@@ -747,7 +933,7 @@ def receive_edit_value(update: Update, context: CallbackContext):
                         f"❌ Пожалуйста, отправьте фото или альбом!\n(Напишите /cancel для отмены)",
                         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
                     )
-                    return EDIT_VALUE if data_type == 'guide' else EDIT_TEMPLATE_VALUE
+                    return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
             break
     save_data(data_type, data)
     logger.info(f"User {update.effective_user.id} updated {field} for {data_type} ID {question_id}")
@@ -798,22 +984,21 @@ def main():
     dp = updater.dispatcher
     dp.add_error_handler(error_handler)
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("cancel", cancel))  # Глобальный /cancel
+    dp.add_handler(CommandHandler("cancel", cancel))
     dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
     dp.add_handler(MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), open_templates))
-    add_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point),
-            MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), add_template)
-        ],
+    dp.add_handler(MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point))
+    dp.add_handler(MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point))
+    guide_add_conv = ConversationHandler(
+        entry_points=[MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point)],
         states={
-            QUESTION: [
+            GUIDE_QUESTION: [
                 MessageHandler(
                     Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
                     receive_question
                 ),
             ],
-            ANSWER: [
+            GUIDE_ANSWER: [
                 MessageHandler(
                     Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
                     receive_answer
@@ -821,14 +1006,24 @@ def main():
                 MessageHandler(Filters.photo, receive_answer) if ENABLE_PHOTOS else None,
                 MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
             ],
-            ANSWER_PHOTOS: [
+            GUIDE_ANSWER_PHOTOS: [
                 MessageHandler(Filters.photo, receive_answer_photos) if ENABLE_PHOTOS else None,
                 MessageHandler(
                     Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
                     receive_answer
                 ),
                 MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
-            ],
+            ]
+        },
+        fallbacks=[],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=False
+    )
+    dp.add_handler(guide_add_conv)
+    template_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_template, pattern='^add_template$')],
+        states={
             TEMPLATE_QUESTION: [
                 MessageHandler(
                     Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
@@ -857,36 +1052,18 @@ def main():
         per_chat=True,
         allow_reentry=False
     )
-    dp.add_handler(add_conv)
-    edit_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point),
-            MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), edit_template)
-        ],
+    dp.add_handler(template_add_conv)
+    guide_edit_conv = ConversationHandler(
+        entry_points=[MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point)],
         states={
-            EDIT_QUESTION: [
+            GUIDE_EDIT_QUESTION: [
                 CallbackQueryHandler(select_edit_question, pattern='^edit_guide_question_.*$'),
                 CallbackQueryHandler(handle_edit_pagination, pattern='^(edit_guide_page_.*|cancel_guide_edit)$')
             ],
-            EDIT_FIELD: [
+            GUIDE_EDIT_FIELD: [
                 CallbackQueryHandler(receive_edit_field, pattern='^(edit_guide_field_.*|cancel_guide_edit)$')
             ],
-            EDIT_VALUE: [
-                MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
-                    receive_edit_value
-                ),
-                MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
-            ],
-            EDIT_TEMPLATE_QUESTION: [
-                CallbackQueryHandler(select_edit_question, pattern='^edit_template_question_.*$'),
-                CallbackQueryHandler(handle_edit_pagination, pattern='^(edit_template_page_.*|cancel_template_edit)$')
-            ],
-            EDIT_TEMPLATE_FIELD: [
-                CallbackQueryHandler(receive_edit_field, pattern='^(edit_template_field_.*|cancel_template_edit)$')
-            ],
-            EDIT_TEMPLATE_VALUE: [
+            GUIDE_EDIT_VALUE: [
                 MessageHandler(
                     Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
                     receive_edit_value
@@ -901,9 +1078,36 @@ def main():
         per_message=False,
         allow_reentry=False
     )
-    dp.add_handler(edit_conv)
+    dp.add_handler(guide_edit_conv)
+    template_edit_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_template, pattern='^edit_template$')],
+        states={
+            TEMPLATE_EDIT_QUESTION: [
+                CallbackQueryHandler(select_edit_question, pattern='^edit_template_question_.*$'),
+                CallbackQueryHandler(handle_edit_pagination, pattern='^(edit_template_page_.*|cancel_template_edit)$')
+            ],
+            TEMPLATE_EDIT_FIELD: [
+                CallbackQueryHandler(receive_edit_field, pattern='^(edit_template_field_.*|cancel_template_edit)$')
+            ],
+            TEMPLATE_EDIT_VALUE: [
+                MessageHandler(
+                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    receive_edit_value
+                ),
+                MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
+            ]
+        },
+        fallbacks=[],
+        per_user=True,
+        per_chat=True,
+        per_message=False,
+        allow_reentry=False
+    )
+    dp.add_handler(template_edit_conv)
     dp.add_handler(CallbackQueryHandler(handle_pagination, pattern='^(guide|template)_page_.*$'))
     dp.add_handler(CallbackQueryHandler(show_answer, pattern='^(guide|template)_question_.*$'))
+    dp.add_handler(CallbackQueryHandler(handle_template_action, pattern='^(add_template|edit_template|cancel_template)$'))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, debug_text))
 
     logger.info("Bot is running...")
