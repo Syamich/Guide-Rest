@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 # Максимальная длина текста кнопки (в символах) для выравнивания
-MAX_BUTTON_TEXT_LENGTH = 80
+MAX_BUTTON_TEXT_LENGTH = 100
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -259,8 +259,8 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
                 continue
             # Обрезаем текст вопроса до 50 символов, чтобы оставить место для выравнивания
             question_text = item["question"][:50] if len(item["question"]) > 50 else item["question"]
-            # Добавляем неразрывные пробелы для выравнивания по левому краю
-            padded_text = f"📄 {question_text}" + "\u00A0" * (MAX_BUTTON_TEXT_LENGTH - len(f"📄 {question_text}"))
+            # Добавляем точки для визуального выравнивания по левому краю
+            padded_text = f"📄 {question_text}" + "." * (MAX_BUTTON_TEXT_LENGTH - len(f"📄 {question_text}"))
             logger.debug(f"Сформирована кнопка справочника: '{padded_text}' (длина: {len(padded_text)})")
             keyboard.append([InlineKeyboardButton(padded_text, callback_data=f'{data_type}_question_{item["id"]}')])
 
@@ -322,8 +322,8 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
                 continue
             # Обрезаем текст вопроса до 50 символов, чтобы оставить место для выравнивания
             question_text = item["question"][:50] if len(item["question"]) > 50 else item["question"]
-            # Добавляем неразрывные пробелы для выравнивания по левому краю
-            padded_text = f"📄 {question_text}" + "\u00A0" * (MAX_BUTTON_TEXT_LENGTH - len(f"📄 {question_text}"))
+            # Добавляем точки для визуального выравнивания по левому краю
+            padded_text = f"📄 {question_text}" + "." * (MAX_BUTTON_TEXT_LENGTH - len(f"📄 {question_text}"))
             logger.debug(f"Сформирована кнопка шаблона: '{padded_text}' (длина: {len(padded_text)})")
             keyboard.append([InlineKeyboardButton(padded_text, callback_data=f'template_question_{item["id"]}')])
 
@@ -369,6 +369,7 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
         return ConversationHandler.END
 
 # Показ ответа
+# Показ ответа
 @restrict_access
 def show_answer(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -376,12 +377,14 @@ def show_answer(update: Update, context: CallbackContext):
     try:
         data_type, _, question_id = query.data.split('_')
         question_id = int(question_id)
-        logger.info(f"Пользователь {update.effective_user.id} запросил ответ для {data_type} ID {question_id}")
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.info(f"Пользователь {user_display} запросил ответ для {data_type} ID {question_id}")
         data = load_data(data_type)
         key = 'questions' if data_type == 'guide' else 'templates'
         item = next((q for q in data[key] if q["id"] == question_id), None)
         if item:
-            response = f"📄 Вопрос: {item['question']}\nОтвет: {item['answer']}"
+            # Форматируем ответ с новой строкой после "Ответ:"
+            response = f"📄 Вопрос: {item['question']}\nОтвет:\n{item['answer']}"
             photo_ids = item.get('photos', []) or ([item['photo']] if item.get('photo') else [])
             if ENABLE_PHOTOS and photo_ids:
                 if len(photo_ids) == 1:
@@ -403,7 +406,8 @@ def show_answer(update: Update, context: CallbackContext):
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
     except Exception as e:
-        logger.error(f"Ошибка в show_answer для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.error(f"Ошибка в show_answer для пользователя {user_display}: {e}", exc_info=True)
         query.message.reply_text(
             "❌ Ошибка при отображении ответа. Попробуйте снова.",
             reply_markup=MAIN_MENU
