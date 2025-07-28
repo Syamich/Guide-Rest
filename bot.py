@@ -2,7 +2,6 @@ import json
 import os
 import subprocess
 import logging
-import re
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
@@ -21,15 +20,15 @@ logger = logging.getLogger(__name__)
 
 # Загрузка .env
 load_dotenv()
-logger.info("Loaded .env file")
+logger.info("Загружен файл .env")
 
 # Проверка BOT_TOKEN
 if not os.getenv("BOT_TOKEN"):
-    logger.error("BOT_TOKEN not found in environment variables")
-    raise ValueError("BOT_TOKEN not found in environment variables. Please set it in .env or PythonAnywhere Environment Variables.")
+    logger.error("BOT_TOKEN не найден в переменных окружения")
+    raise ValueError("BOT_TOKEN не найден в переменных окружения. Установите его в .env или в переменных окружения PythonAnywhere.")
 
 # Включение/отключение поддержки фотографий
-ENABLE_PHOTOS = True  # Установи False, чтобы отключить фотографии
+ENABLE_PHOTOS = True  # Установите False, чтобы отключить фотографии
 
 # Состояния для ConversationHandler
 GUIDE_QUESTION, GUIDE_ANSWER, GUIDE_ANSWER_PHOTOS = range(3)
@@ -56,7 +55,7 @@ def load_data(data_type: str):
             key = 'questions' if data_type == 'guide' else 'templates'
             return data if key in data else {key: []}
     except FileNotFoundError:
-        logger.warning(f"{file_name} not found, initializing empty {data_type}")
+        logger.warning(f"{file_name} не найден, инициализация пустого {data_type}")
         return {"questions" if data_type == 'guide' else "templates": []}
 
 def load_guide():
@@ -70,14 +69,14 @@ def load_users():
     users_str = os.getenv("ALLOWED_USERS", "")
     logger.info(f"Raw ALLOWED_USERS: '{users_str}'")
     if not users_str:
-        logger.warning("ALLOWED_USERS is empty")
+        logger.warning("ALLOWED_USERS пуст")
         return []
     try:
         users = [int(user_id) for user_id in users_str.split(",") if user_id.strip()]
-        logger.info(f"Loaded allowed users: {users}")
+        logger.info(f"Загружены разрешенные пользователи: {users}")
         return users
     except ValueError as e:
-        logger.error(f"Error parsing ALLOWED_USERS: {e}")
+        logger.error(f"Ошибка парсинга ALLOWED_USERS: {e}")
         return []
 
 # Сохранение JSON и синхронизация с GitHub
@@ -97,51 +96,50 @@ def sync_with_github():
     try:
         result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
         if not result.stdout:
-            logger.info("No changes in working directory to commit")
+            logger.info("Нет изменений в рабочей директории для коммита")
             return
         subprocess.run(["git", "add", "."], check=True)
-        subprocess.run(["git", "commit", "-m", "Update JSON files via bot"], check=True)
+        subprocess.run(["git", "commit", "-m", "Обновление JSON файлов через бот"], check=True)
         subprocess.run(["git", "pull", "--rebase"], check=True)
         subprocess.run(["git", "push", "origin", "main"], check=True)
-        logger.info("Successfully synced JSON files to GitHub")
+        logger.info("Успешно синхронизированы JSON файлы с GitHub")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Git sync error: {e}")
+        logger.error(f"Ошибка синхронизации с Git: {e}")
         try:
             subprocess.run(["git", "rebase", "--abort"], check=True)
             subprocess.run(["git", "pull", "--no-rebase"], check=True)
             subprocess.run(["git", "push", "origin", "main"], check=True)
-            logger.info("Resolved git conflict and synced JSON files")
+            logger.info("Разрешен конфликт git и синхронизированы JSON файлы")
         except subprocess.CalledProcessError as e2:
-            logger.error(f"Failed to resolve git conflict: {e2}")
+            logger.error(f"Не удалось разрешить конфликт git: {e2}")
     except Exception as e:
-        logger.error(f"Unexpected error during git sync: {e}")
+        logger.error(f"Неожиданная ошибка при синхронизации с git: {e}")
 
 # Проверка доступа
 def restrict_access(func):
     def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
         user_id = update.effective_user.id
-        logger.info(f"Checking access for user_id: {user_id}")
+        logger.info(f"Проверка доступа для user_id: {user_id}")
         users = load_users()
-        logger.info(f"Allowed users: {users}")
+        logger.info(f"Разрешенные пользователи: {users}")
         if user_id not in users:
             error_msg = "🚫 Доступ запрещён! Обратитесь к администратору."
             if update.message:
                 update.message.reply_text(error_msg, reply_markup=MAIN_MENU)
             elif update.callback_query:
                 update.callback_query.message.reply_text(error_msg, reply_markup=MAIN_MENU)
-            logger.warning(f"Unauthorized access attempt by user {user_id}")
+            logger.warning(f"Попытка несанкционированного доступа пользователем {user_id}")
             return
         return func(update, context, *args, **kwargs)
     return wrapper
 
 # Обработчик ошибок
 def error_handler(update: Update, context: CallbackContext):
-    logger.error(f"Update {update} caused error: {context.error}", exc_info=True)
-    logger.info(f"Current conversation state: {context.user_data.get('conversation_state', 'None')}")
+    logger.error(f"Update {update} вызвал ошибку: {context.error}", exc_info=True)
+    logger.info(f"Текущее состояние диалога: {context.user_data.get('conversation_state', 'NONE')}")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'ERROR'
-    if hasattr(context, 'dispatcher') and hasattr(context.dispatcher, 'update_persistence'):
-        context.dispatcher.update_persistence()
+    context.user_data['conversation_active'] = False
     if update.message:
         update.message.reply_text(
             "❌ Произошла ошибка. Попробуйте снова или свяжитесь с администратором.",
@@ -157,7 +155,7 @@ def error_handler(update: Update, context: CallbackContext):
 # Команда /start
 @restrict_access
 def start(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} started the bot")
+    logger.info(f"Пользователь {update.effective_user.id} запустил бот")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'START'
     context.user_data['conversation_active'] = False
@@ -170,16 +168,14 @@ def start(update: Update, context: CallbackContext):
 # Команда /cancel
 @restrict_access
 def cancel(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} cancelled the conversation")
+    logger.info(f"Пользователь {update.effective_user.id} отменил диалог")
     if context.user_data.get('timeout_task'):
         context.user_data['timeout_task'].cancel()
         context.user_data['timeout_task'] = None
-        logger.info(f"User {update.effective_user.id} cancelled timeout task")
+        logger.info(f"Пользователь {update.effective_user.id} отменил задачу таймаута")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'CANCELLED'
     context.user_data['conversation_active'] = False
-    if hasattr(context, 'dispatcher') and hasattr(context.dispatcher, 'update_persistence'):
-        context.dispatcher.update_persistence()
     update.message.reply_text(
         "🚪 Диалог отменён. Выберите действие:",
         reply_markup=MAIN_MENU
@@ -189,7 +185,7 @@ def cancel(update: Update, context: CallbackContext):
 # Открытие справочника
 @restrict_access
 def open_guide(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} opened guide")
+    logger.info(f"Пользователь {update.effective_user.id} открыл справочник")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'OPEN_GUIDE'
     context.user_data['conversation_active'] = False
@@ -208,7 +204,7 @@ def open_guide(update: Update, context: CallbackContext):
 # Открытие шаблонов
 @restrict_access
 def open_templates(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} opened templates")
+    logger.info(f"Пользователь {update.effective_user.id} открыл шаблоны")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'OPEN_TEMPLATE'
     context.user_data['conversation_active'] = False
@@ -247,16 +243,16 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
         keyboard = []
         for item in items:
             if not isinstance(item, dict) or "question" not in item or "id" not in item:
-                logger.error(f"Invalid guide data: {item}")
+                logger.error(f"Неверные данные справочника: {item}")
                 continue
             question_text = item["question"][:100] if len(item["question"]) > 100 else item["question"]
-            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'guide_question_{item["id"]}')])
+            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'{data_type}_question_{item["id"]}')])
 
         nav_buttons = []
         if page > 0:
-            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'guide_page_{page-1}'))
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'{data_type}_page_{page-1}'))
         if page < total_pages - 1:
-            nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'guide_page_{page+1}'))
+            nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'{data_type}_page_{page+1}'))
         keyboard.append(nav_buttons)
 
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -267,13 +263,13 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
         elif update.callback_query:
             update.callback_query.message.edit_text(text, reply_markup=reply_markup)
 
-        logger.info(f"User {update.effective_user.id} viewed guide page {page + 1}")
-        context.user_data['conversation_state'] = 'GUIDE_PAGE'
+        logger.info(f"Пользователь {update.effective_user.id} просмотрел страницу справочника {page + 1}")
+        context.user_data['conversation_state'] = f'{data_type.upper()}_PAGE'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"Error in display_guide_page for user {update.effective_user.id}: {str(e)}", exc_info=True)
+        logger.error(f"Ошибка в display_guide_page для пользователя {update.effective_user.id}: {str(e)}", exc_info=True)
         if update.message:
             update.message.reply_text(
                 "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
@@ -304,7 +300,7 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
         keyboard = []
         for item in items:
             if not isinstance(item, dict) or "question" not in item or "id" not in item:
-                logger.error(f"Invalid template data: {item}")
+                logger.error(f"Неверные данные шаблона: {item}")
                 continue
             question_text = item["question"][:100] if len(item["question"]) > 100 else item["question"]
             keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'template_question_{item["id"]}')])
@@ -329,13 +325,13 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
         elif update.callback_query:
             update.callback_query.message.edit_text(text, reply_markup=reply_markup)
 
-        logger.info(f"User {update.effective_user.id} viewed template page {page + 1}")
+        logger.info(f"Пользователь {update.effective_user.id} просмотрел страницу шаблонов {page + 1}")
         context.user_data['conversation_state'] = 'TEMPLATE_PAGE'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"Error in display_template_page for user {update.effective_user.id}: {str(e)}", exc_info=True)
+        logger.error(f"Ошибка в display_template_page для пользователя {update.effective_user.id}: {str(e)}", exc_info=True)
         if update.message:
             update.message.reply_text(
                 "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
@@ -353,50 +349,66 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
 def show_answer(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
-    data_type, _, question_id = query.data.split('_')
-    question_id = int(question_id)
-    logger.info(f"User {update.effective_user.id} requested answer for {data_type} ID {question_id}")
-    data = load_data(data_type)
-    key = 'questions' if data_type == 'guide' else 'templates'
-    item = next((q for q in data[key] if q["id"] == question_id), None)
-    if item:
-        response = f"📄 Вопрос: {item['question']}\nОтвет: {item['answer']}"
-        photo_ids = item.get('photos', []) or ([item['photo']] if item.get('photo') else [])
-        if ENABLE_PHOTOS and photo_ids:
-            if len(photo_ids) == 1:
-                query.message.reply_photo(
-                    photo=photo_ids[0],
-                    caption=response,
-                    reply_markup=MAIN_MENU
-                )
+    try:
+        data_type, _, question_id = query.data.split('_')
+        question_id = int(question_id)
+        logger.info(f"Пользователь {update.effective_user.id} запросил ответ для {data_type} ID {question_id}")
+        data = load_data(data_type)
+        key = 'questions' if data_type == 'guide' else 'templates'
+        item = next((q for q in data[key] if q["id"] == question_id), None)
+        if item:
+            response = f"📄 Вопрос: {item['question']}\nОтвет: {item['answer']}"
+            photo_ids = item.get('photos', []) or ([item['photo']] if item.get('photo') else [])
+            if ENABLE_PHOTOS and photo_ids:
+                if len(photo_ids) == 1:
+                    query.message.reply_photo(
+                        photo=photo_ids[0],
+                        caption=response,
+                        reply_markup=MAIN_MENU
+                    )
+                else:
+                    media = [InputMediaPhoto(media=photo_id, caption=response if i == 0 else None) for i, photo_id in enumerate(photo_ids)]
+                    query.message.reply_media_group(media=media)
+                    query.message.reply_text("Выберите действие:", reply_markup=MAIN_MENU)
             else:
-                media = [InputMediaPhoto(media=photo_id, caption=response if i == 0 else None) for i, photo_id in enumerate(photo_ids)]
-                query.message.reply_media_group(media=media)
-                query.message.reply_text("Выберите действие:", reply_markup=MAIN_MENU)
+                query.message.reply_text(response, reply_markup=MAIN_MENU)
         else:
-            query.message.reply_text(response, reply_markup=MAIN_MENU)
-    else:
-        query.message.reply_text(f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!", reply_markup=MAIN_MENU)
-    context.user_data.clear()
-    context.user_data['conversation_state'] = f'SHOW_{data_type.upper()}_ANSWER'
-    context.user_data['conversation_active'] = False
-    return ConversationHandler.END
+            query.message.reply_text(f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!", reply_markup=MAIN_MENU)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = f'SHOW_{data_type.upper()}_ANSWER'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Ошибка в show_answer для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        query.message.reply_text(
+            "❌ Ошибка при отображении ответа. Попробуйте снова.",
+            reply_markup=MAIN_MENU
+        )
+        return ConversationHandler.END
 
 # Обработка пагинации
 @restrict_access
 def handle_pagination(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
-    data_type, _, page = query.data.split('_')
-    page = int(page)
-    data = context.user_data.get('data', load_data(data_type))
-    if data_type == 'guide':
-        display_guide_page(update, context, data, page, data_type)
-    else:
-        display_template_page(update, context, data, page)
-    context.user_data['conversation_state'] = f'{data_type.upper()}_PAGINATION'
-    context.user_data['conversation_active'] = False
-    return ConversationHandler.END
+    try:
+        data_type, _, page = query.data.split('_')
+        page = int(page)
+        data = context.user_data.get('data', load_data(data_type))
+        if data_type == 'guide':
+            display_guide_page(update, context, data, page, data_type)
+        else:
+            display_template_page(update, context, data, page)
+        context.user_data['conversation_state'] = f'{data_type.upper()}_PAGINATION'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Ошибка в handle_pagination для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        query.message.reply_text(
+            "❌ Ошибка при переключении страницы. Попробуйте снова.",
+            reply_markup=MAIN_MENU
+        )
+        return ConversationHandler.END
 
 # Обработка действий с шаблонами
 @restrict_access
@@ -404,43 +416,51 @@ def handle_template_action(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     action = query.data
-    if action == 'add_template':
-        return add_template(update, context)
-    elif action == 'edit_template':
-        return edit_template(update, context)
-    elif action == 'cancel_template':
-        context.user_data.clear()
-        context.user_data['conversation_state'] = 'CANCEL_TEMPLATE'
-        context.user_data['conversation_active'] = False
-        query.message.reply_text("🚪 Вернулись в главное меню.", reply_markup=MAIN_MENU)
+    try:
+        if action == 'add_template':
+            return add_template(update, context)
+        elif action == 'edit_template':
+            return edit_template(update, context)
+        elif action == 'cancel_template':
+            context.user_data.clear()
+            context.user_data['conversation_state'] = 'CANCEL_TEMPLATE'
+            context.user_data['conversation_active'] = False
+            query.message.reply_text("🚪 Вернулись в главное меню.", reply_markup=MAIN_MENU)
+            return ConversationHandler.END
         return ConversationHandler.END
-    return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Ошибка в handle_template_action для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        query.message.reply_text(
+            "❌ Ошибка при обработке действия с шаблоном. Попробуйте снова.",
+            reply_markup=MAIN_MENU
+        )
+        return ConversationHandler.END
 
 # Поиск по ключевым словам
 @restrict_access
 def perform_search(update: Update, context: CallbackContext):
+    if context.user_data.get('conversation_active', False):
+        logger.info(f"Пользователь {update.effective_user.id} находится в активном диалоге ({context.user_data.get('conversation_state')}), пропускаем perform_search")
+        return
     try:
-        logger.info(f"User {update.effective_user.id} entered perform_search with text: '{update.message.text}'")
+        logger.info(f"Пользователь {update.effective_user.id} вошел в perform_search с текстом: '{update.message.text}'")
         if not update.message or not update.message.text:
-            logger.error(f"User {update.effective_user.id} sent empty or invalid message for search")
+            logger.error(f"Пользователь {update.effective_user.id} отправил пустое или неверное сообщение для поиска")
             update.message.reply_text(
                 "❌ Пожалуйста, введите ключевое слово для поиска!",
                 reply_markup=MAIN_MENU
             )
-            return ConversationHandler.END
-
+            return
         keyword = update.message.text.lower().strip()
-        logger.info(f"User {update.effective_user.id} searched for '{keyword}'")
-
+        logger.info(f"Пользователь {update.effective_user.id} выполнил поиск по ключевому слову '{keyword}'")
         guide = load_guide()
         if not isinstance(guide, dict) or "questions" not in guide or not isinstance(guide["questions"], list):
-            logger.error("Invalid guide.json structure")
+            logger.error("Неверная структура guide.json")
             update.message.reply_text(
                 "❌ Ошибка: Неверная структура файла guide.json. Свяжитесь с администратором.",
                 reply_markup=MAIN_MENU
             )
-            return ConversationHandler.END
-
+            return
         results = [
             q for q in guide["questions"]
             if isinstance(q, dict) and
@@ -448,25 +468,22 @@ def perform_search(update: Update, context: CallbackContext):
             "answer" in q and isinstance(q["answer"], str) and
             (keyword in q["question"].lower() or keyword in q["answer"].lower())
         ]
-
         if not results:
-            logger.info(f"No results found for keyword '{keyword}'")
+            logger.info(f"Результаты для ключевого слова '{keyword}' не найдены")
             update.message.reply_text(
                 "🔍 Ничего не найдено. Попробуйте другое ключевое слово!",
                 reply_markup=MAIN_MENU
             )
-            return ConversationHandler.END
-
+            return
         context.user_data['data'] = {"questions": results}
         context.user_data['page'] = 0
         context.user_data['data_type'] = 'guide'
         context.user_data['conversation_state'] = 'SEARCH'
         context.user_data['conversation_active'] = False
         display_guide_page(update, context, {"questions": results}, 0, 'guide')
-        return ConversationHandler.END
-
+        return
     except Exception as e:
-        logger.error(f"Error in perform_search for user {update.effective_user.id}: {str(e)}", exc_info=True)
+        logger.error(f"Ошибка в perform_search для пользователя {update.effective_user.id}: {str(e)}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
@@ -474,12 +491,12 @@ def perform_search(update: Update, context: CallbackContext):
             "❌ Произошла ошибка при поиске. Попробуйте снова или свяжитесь с администратором.",
             reply_markup=MAIN_MENU
         )
-        return ConversationHandler.END
+        return
 
 # Добавление пункта в справочник
 @restrict_access
 def add_point(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} started adding a new guide point")
+    logger.info(f"Пользователь {update.effective_user.id} начал добавление нового пункта справочника")
     context.user_data.clear()
     context.user_data['photos'] = []
     context.user_data['media_group_id'] = None
@@ -491,13 +508,15 @@ def add_point(update: Update, context: CallbackContext):
     context.user_data['conversation_active'] = True
     context.user_data['data_type'] = 'guide'
     try:
-        update.message.reply_text(
+        message = update.message.reply_text(
             "➕ Введите вопрос (например, 'Ошибка входа в систему'):\n(Напишите /cancel для отмены)",
-            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+            quote=False
         )
-        logger.info(f"User {update.effective_user.id} successfully triggered add_point")
+        logger.info(f"Пользователь {update.effective_user.id} успешно запустил add_point")
+        return GUIDE_QUESTION
     except Exception as e:
-        logger.error(f"Error in add_point for user {update.effective_user.id}: {e}", exc_info=True)
+        logger.error(f"Ошибка в add_point для пользователя {update.effective_user.id}: {e}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
@@ -506,12 +525,11 @@ def add_point(update: Update, context: CallbackContext):
             reply_markup=MAIN_MENU
         )
         return ConversationHandler.END
-    return GUIDE_QUESTION
 
 # Добавление шаблона
 @restrict_access
 def add_template(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} started adding a new template")
+    logger.info(f"Пользователь {update.effective_user.id} начал добавление нового шаблона")
     context.user_data.clear()
     context.user_data['photos'] = []
     context.user_data['media_group_id'] = None
@@ -526,16 +544,19 @@ def add_template(update: Update, context: CallbackContext):
         if update.message:
             update.message.reply_text(
                 "➕ Введите вопрос для шаблона (например, 'Шаблон ответа на запрос'):\n(Напишите /cancel для отмены)",
-                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                quote=False
             )
         elif update.callback_query:
             update.callback_query.message.reply_text(
                 "➕ Введите вопрос для шаблона (например, 'Шаблон ответа на запрос'):\n(Напишите /cancel для отмены)",
-                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                quote=False
             )
-        logger.info(f"User {update.effective_user.id} successfully triggered add_template")
+        logger.info(f"Пользователь {update.effective_user.id} успешно запустил add_template")
+        return TEMPLATE_QUESTION
     except Exception as e:
-        logger.error(f"Error in add_template for user {update.effective_user.id}: {e}", exc_info=True)
+        logger.error(f"Ошибка в add_template для пользователя {update.effective_user.id}: {e}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
@@ -550,47 +571,77 @@ def add_template(update: Update, context: CallbackContext):
                 reply_markup=MAIN_MENU
             )
         return ConversationHandler.END
-    return TEMPLATE_QUESTION
 
+# Обработка вопроса
 @restrict_access
 def receive_question(update: Update, context: CallbackContext):
+    logger.info(f"Пользователь {update.effective_user.id} вошел в receive_question, состояние: {context.user_data.get('conversation_state')}, текст: '{update.message.text}'")
     if not context.user_data.get('conversation_active', False):
-        logger.warning(f"User {update.effective_user.id} attempted to provide question in inactive conversation")
+        logger.warning(f"Пользователь {update.effective_user.id} попытался отправить вопрос в неактивном диалоге")
         update.message.reply_text(
             f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
-            reply_markup=MAIN_MENU
+            reply_markup=MAIN_MENU,
+            quote=False
         )
         context.user_data.clear()
         context.user_data['conversation_state'] = 'INVALID_QUESTION'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
     data_type = context.user_data.get('data_type', 'guide')
-    logger.info(f"User {update.effective_user.id} entered {data_type} question: {update.message.text}")
+    if data_type not in ['guide', 'template']:
+        logger.error(f"Недопустимый data_type: {data_type}")
+        update.message.reply_text(
+            "❌ Ошибка: Неверный тип данных. Начните заново.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'INVALID_DATA_TYPE'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    logger.info(f"Пользователь {update.effective_user.id} ввел вопрос для {data_type}: {update.message.text}")
     context.user_data['new_question'] = update.message.text
     context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_QUESTION'
-    prompt = "Введите подсказку для решения"
+    prompt = "Введите ответ"
     if ENABLE_PHOTOS:
         prompt += " (или отправьте фото/альбом с подписью)"
     prompt += ":\n(Напишите /cancel для отмены)"
     update.message.reply_text(
         prompt,
-        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+        quote=False
     )
+    logger.info(f"Переход в состояние {'GUIDE_ANSWER' if data_type == 'guide' else 'TEMPLATE_ANSWER'} для пользователя {update.effective_user.id}")
     return GUIDE_ANSWER if data_type == 'guide' else TEMPLATE_ANSWER
 
+# Обработка ответа
 @restrict_access
 def receive_answer(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
-        logger.warning(f"User {update.effective_user.id} attempted to provide answer without active conversation or question")
+        logger.warning(f"Пользователь {update.effective_user.id} попытался отправить ответ без активного диалога или вопроса")
         update.message.reply_text(
             f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
-            reply_markup=MAIN_MENU
+            reply_markup=MAIN_MENU,
+            quote=False
         )
         context.user_data.clear()
         context.user_data['conversation_state'] = 'INVALID_ANSWER'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
     data_type = context.user_data.get('data_type', 'guide')
+    if data_type not in ['guide', 'template']:
+        logger.error(f"Недопустимый data_type: {data_type}")
+        update.message.reply_text(
+            "❌ Ошибка: Неверный тип данных. Начните заново.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'INVALID_DATA_TYPE'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    if 'photos' not in context.user_data:
+        context.user_data['photos'] = []
     context.user_data['answer'] = update.message.caption if update.message.photo else update.message.text if update.message.text else ""
     context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
     if ENABLE_PHOTOS and update.message.photo:
@@ -598,9 +649,9 @@ def receive_answer(update: Update, context: CallbackContext):
             context.user_data['media_group_id'] = update.message.media_group_id
             context.user_data['photos'].append(update.message.photo[-1].file_id)
             context.user_data['last_photo_time'] = update.message.date
-            logger.info(f"User {update.effective_user.id} added photo to {data_type} media group {update.message.media_group_id}: {update.message.photo[-1].file_id}")
+            logger.info(f"Пользователь {update.effective_user.id} добавил фото в альбом {data_type} media group {update.message.media_group_id}: {update.message.photo[-1].file_id}")
             if len(context.user_data['photos']) == 1:
-                loading_message = update.message.reply_text("⏳ Загрузка...")
+                loading_message = update.message.reply_text("⏳ Загрузка...", quote=False)
                 context.user_data['loading_message_id'] = loading_message.message_id
                 if not context.user_data.get('timeout_task'):
                     context.user_data['timeout_task'] = context.job_queue.run_once(
@@ -609,41 +660,43 @@ def receive_answer(update: Update, context: CallbackContext):
             return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         else:
             context.user_data['photos'] = [update.message.photo[-1].file_id]
-            logger.info(f"User {update.effective_user.id} added single photo to {data_type}: {context.user_data['photos']}")
+            logger.info(f"Пользователь {update.effective_user.id} добавил одно фото в {data_type}: {context.user_data['photos']}")
     save_new_point(update, context, send_message=True)
-    logger.info(f"User {update.effective_user.id} ending add_{data_type}_conv in receive_answer")
+    logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в receive_answer")
     context.user_data.clear()
     context.user_data['conversation_state'] = f'{data_type.upper()}_POINT_SAVED'
     context.user_data['conversation_active'] = False
     return ConversationHandler.END
 
+# Проверка таймаута альбома
 def check_album_timeout(context: CallbackContext):
     update, context = context.job.context
     if context.user_data.get('last_photo_time') == update.message.date and not context.user_data.get('point_saved'):
         data_type = context.user_data.get('data_type', 'guide')
-        logger.info(f"User {update.effective_user.id} finished album for {data_type} media group {context.user_data.get('media_group_id')}")
+        logger.info(f"Пользователь {update.effective_user.id} завершил альбом для {data_type} media group {context.user_data.get('media_group_id')}")
         if context.user_data.get('loading_message_id'):
             try:
                 context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=context.user_data['loading_message_id']
                 )
-                logger.info(f"User {update.effective_user.id} deleted loading message")
+                logger.info(f"Пользователь {update.effective_user.id} удалил сообщение о загрузке")
             except Exception as e:
-                logger.error(f"Failed to delete loading message: {e}")
+                logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
         save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True
         context.user_data['timeout_task'] = None
-        logger.info(f"User {update.effective_user.id} ending add_{data_type}_conv in check_album_timeout")
+        logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в check_album_timeout")
         context.user_data.clear()
         context.user_data['conversation_state'] = f'{data_type.upper()}_ALBUM_SAVED'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
     return None
 
+# Сохранение нового пункта
 def save_new_point(update: Update, context: CallbackContext, send_message: bool = False):
     if context.user_data.get('point_saved'):
-        logger.info(f"User {update.effective_user.id} skipped saving point as it was already saved")
+        logger.info(f"Пользователь {update.effective_user.id} пропустил сохранение пункта, так как он уже сохранен")
         return
     data_type = context.user_data.get('data_type', 'guide')
     data = load_data(data_type)
@@ -654,59 +707,75 @@ def save_new_point(update: Update, context: CallbackContext, send_message: bool 
         "question": context.user_data['new_question'],
         "answer": context.user_data['answer']
     }
-    if ENABLE_PHOTOS and context.user_data['photos']:
+    if ENABLE_PHOTOS and context.user_data.get('photos'):
         new_point['photos'] = context.user_data['photos']
-        logger.info(f"User {update.effective_user.id} added photos to {data_type}: {new_point['photos']}")
+        logger.info(f"Пользователь {update.effective_user.id} добавил фото в {data_type}: {new_point['photos']}")
     data[key].append(new_point)
     save_data(data_type, data)
-    logger.info(f"User {update.effective_user.id} added new {data_type} point: {new_point['question']}")
+    logger.info(f"Пользователь {update.effective_user.id} добавил новый пункт {data_type}: {new_point['question']}")
     if send_message:
         update.message.reply_text(
             f"➕ {'Пункт' if data_type == 'guide' else 'Шаблон'} добавлен!\nВопрос: {new_point['question']}",
-            reply_markup=MAIN_MENU
+            reply_markup=MAIN_MENU,
+            quote=False
         )
     context.user_data['point_saved'] = True
 
+# Обработка фотографий для ответа
 @restrict_access
 def receive_answer_photos(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
-        logger.warning(f"User {update.effective_user.id} attempted to provide photos without active conversation or question")
+        logger.warning(f"Пользователь {update.effective_user.id} попытался отправить фото без активного диалога или вопроса")
         update.message.reply_text(
             f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
-            reply_markup=MAIN_MENU
+            reply_markup=MAIN_MENU,
+            quote=False
         )
         context.user_data.clear()
         context.user_data['conversation_state'] = 'INVALID_PHOTOS'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
     data_type = context.user_data.get('data_type', 'guide')
+    if data_type not in ['guide', 'template']:
+        logger.error(f"Недопустимый data_type: {data_type}")
+        update.message.reply_text(
+            "❌ Ошибка: Неверный тип данных. Начните заново.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'INVALID_DATA_TYPE'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    if 'photos' not in context.user_data:
+        context.user_data['photos'] = []
     if update.message.media_group_id == context.user_data.get('media_group_id'):
         context.user_data['photos'].append(update.message.photo[-1].file_id)
         context.user_data['last_photo_time'] = update.message.date
-        logger.info(f"User {update.effective_user.id} added photo to {data_type} media group: {update.message.photo[-1].file_id}")
+        logger.info(f"Пользователь {update.effective_user.id} добавил фото в альбом {data_type}: {update.message.photo[-1].file_id}")
         if not context.user_data.get('timeout_task'):
             context.user_data['timeout_task'] = context.job_queue.run_once(
                 check_album_timeout, 2, context=(update, context)
             )
         return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     if not context.user_data.get('point_saved') and context.user_data.get('photos'):
-        logger.info(f"User {update.effective_user.id} finished album for {data_type} media group {context.user_data.get('media_group_id')} due to new message")
+        logger.info(f"Пользователь {update.effective_user.id} завершил альбом для {data_type} media group {context.user_data.get('media_group_id')} из-за нового сообщения")
         if context.user_data.get('timeout_task'):
             context.user_data['timeout_task'].cancel()
             context.user_data['timeout_task'] = None
-            logger.info(f"User {update.effective_user.id} cancelled timeout task in receive_answer_photos")
+            logger.info(f"Пользователь {update.effective_user.id} отменил задачу таймаута в receive_answer_photos")
         if context.user_data.get('loading_message_id'):
             try:
                 context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=context.user_data['loading_message_id']
                 )
-                logger.info(f"User {update.effective_user.id} deleted loading message")
+                logger.info(f"Пользователь {update.effective_user.id} удалил сообщение о загрузке")
             except Exception as e:
-                logger.error(f"Failed to delete loading message: {e}")
+                logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
         save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True
-        logger.info(f"User {update.effective_user.id} ending add_{data_type}_conv in receive_answer_photos")
+        logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в receive_answer_photos")
         context.user_data.clear()
         context.user_data['conversation_state'] = f'{data_type.upper()}_PHOTOS_SAVED'
         context.user_data['conversation_active'] = False
@@ -716,401 +785,572 @@ def receive_answer_photos(update: Update, context: CallbackContext):
 # Редактирование пункта справочника
 @restrict_access
 def edit_point(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} started editing a guide point")
+    logger.info(f"Пользователь {update.effective_user.id} начал редактирование пункта справочника")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'EDIT_GUIDE'
     context.user_data['conversation_active'] = True
     context.user_data['data_type'] = 'guide'
-    guide = load_guide()
-    if not guide["questions"]:
-        update.message.reply_text(
-            "📖 Справочник пуст. Нечего редактировать! ➕",
-            reply_markup=MAIN_MENU
-        )
+    try:
+        guide = load_guide()
+        if not guide["questions"]:
+            update.message.reply_text(
+                "📖 Справочник пуст. Нечего редактировать! ➕",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+            context.user_data['conversation_active'] = False
+            return ConversationHandler.END
+        context.user_data['data'] = guide
+        context.user_data['page'] = 0
+        display_guide_edit_page(update, context, guide, 0)
+        return GUIDE_EDIT_QUESTION
+    except Exception as e:
+        logger.error(f"Ошибка в edit_point для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
+        update.message.reply_text(
+            "❌ Ошибка при редактировании пункта. Попробуйте снова.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
         return ConversationHandler.END
-    context.user_data['data'] = guide
-    context.user_data['page'] = 0
-    display_guide_edit_page(update, context, guide, 0)
-    return GUIDE_EDIT_QUESTION
 
 # Редактирование шаблона
 @restrict_access
 def edit_template(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} started editing a template")
+    logger.info(f"Пользователь {update.effective_user.id} начал редактирование шаблона")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'EDIT_TEMPLATE'
     context.user_data['conversation_active'] = True
     context.user_data['data_type'] = 'template'
-    templates = load_templates()
-    if not templates["templates"]:
+    try:
+        templates = load_templates()
+        if not templates["templates"]:
+            if update.message:
+                update.message.reply_text(
+                    "📋 Шаблоны ответов пусты. Нечего редактировать! ➕",
+                    reply_markup=MAIN_MENU,
+                    quote=False
+                )
+            elif update.callback_query:
+                update.callback_query.message.reply_text(
+                    "📋 Шаблоны ответов пусты. Нечего редактировать! ➕",
+                    reply_markup=MAIN_MENU,
+                    quote=False
+                )
+            context.user_data['conversation_active'] = False
+            return ConversationHandler.END
+        context.user_data['data'] = templates
+        context.user_data['page'] = 0
+        display_template_edit_page(update, context, templates, 0)
+        return TEMPLATE_EDIT_QUESTION
+    except Exception as e:
+        logger.error(f"Ошибка в edit_template для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
         if update.message:
             update.message.reply_text(
-                "📋 Шаблоны ответов пусты. Нечего редактировать! ➕",
-                reply_markup=MAIN_MENU
+                "❌ Ошибка при редактировании шаблона. Попробуйте снова.",
+                reply_markup=MAIN_MENU,
+                quote=False
             )
         elif update.callback_query:
             update.callback_query.message.reply_text(
-                "📋 Шаблоны ответов пусты. Нечего редактировать! ➕",
-                reply_markup=MAIN_MENU
+                "❌ Ошибка при редактировании шаблона. Попробуйте снова.",
+                reply_markup=MAIN_MENU,
+                quote=False
             )
-        context.user_data['conversation_active'] = False
         return ConversationHandler.END
-    context.user_data['data'] = templates
-    context.user_data['page'] = 0
-    display_template_edit_page(update, context, templates, 0)
-    return TEMPLATE_EDIT_QUESTION
 
 # Отображение страницы редактирования справочника
 def display_guide_edit_page(update: Update, context: CallbackContext, data, page):
-    ITEMS_PER_PAGE = 15
-    total_items = len(data["questions"])
-    total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
-    page = max(0, min(page, total_pages - 1))
-    context.user_data['page'] = page
-    context.user_data['data'] = data
-    context.user_data['data_type'] = 'guide'
+    try:
+        ITEMS_PER_PAGE = 15
+        total_items = len(data["questions"])
+        total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+        page = max(0, min(page, total_pages - 1))
+        context.user_data['page'] = page
+        context.user_data['data'] = data
+        context.user_data['data_type'] = 'guide'
 
-    start_idx = page * ITEMS_PER_PAGE
-    end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
-    items = data["questions"][start_idx:end_idx]
+        start_idx = page * ITEMS_PER_PAGE
+        end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
+        items = data["questions"][start_idx:end_idx]
 
-    keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'edit_guide_question_{q["id"]}')] for q in items]
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'edit_guide_page_{page-1}'))
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'edit_guide_page_{page+1}'))
-    nav_buttons.append(InlineKeyboardButton("🚪 Отмена", callback_data='cancel_guide_edit'))
-    keyboard.append(nav_buttons)
+        keyboard = []
+        for item in items:
+            if not isinstance(item, dict) or "question" not in item or "id" not in item:
+                logger.error(f"Неверные данные справочника: {item}")
+                continue
+            question_text = item["question"][:100] if len(item["question"]) > 100 else item["question"]
+            callback_data = f'edit_guide_question_{item["id"]}'
+            logger.info(f"Сформирована кнопка редактирования: callback_data={callback_data}, вопрос={question_text}")
+            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=callback_data)])
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    text = f"✏️ Выберите вопрос для редактирования (страница {page + 1}/{total_pages}):"
-    if update.message:
-        update.message.reply_text(text, reply_markup=reply_markup)
-    elif update.callback_query:
-        update.callback_query.message.edit_text(text, reply_markup=reply_markup)
-    logger.info(f"User {update.effective_user.id} viewed guide edit page {page + 1}")
-    context.user_data['conversation_state'] = 'EDIT_GUIDE_PAGE'
-    return GUIDE_EDIT_QUESTION
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'edit_guide_page_{page-1}'))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'edit_guide_page_{page+1}'))
+        nav_buttons.append(InlineKeyboardButton("🚪 Отмена", callback_data='cancel_guide_edit'))
+        keyboard.append(nav_buttons)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"✏️ Выберите вопрос для редактирования (страница {page + 1}/{total_pages}):"
+        if update.message:
+            update.message.reply_text(text, reply_markup=reply_markup, quote=False)
+        elif update.callback_query:
+            update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+        logger.info(f"Пользователь {update.effective_user.id} просмотрел страницу редактирования справочника {page + 1}")
+        context.user_data['conversation_state'] = 'EDIT_GUIDE_PAGE'
+        return GUIDE_EDIT_QUESTION
+    except Exception as e:
+        logger.error(f"Ошибка в display_guide_edit_page для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
+        if update.message:
+            update.message.reply_text(
+                "❌ Ошибка при отображении страницы редактирования. Попробуйте снова.",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+        elif update.callback_query:
+            update.callback_query.message.reply_text(
+                "❌ Ошибка при отображении страницы редактирования. Попробуйте снова.",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+        return ConversationHandler.END
 
 # Отображение страницы редактирования шаблонов
 def display_template_edit_page(update: Update, context: CallbackContext, data, page):
-    ITEMS_PER_PAGE = 15
-    total_items = len(data["templates"])
-    total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
-    page = max(0, min(page, total_pages - 1))
-    context.user_data['page'] = page
-    context.user_data['data'] = data
-    context.user_data['data_type'] = 'template'
+    try:
+        ITEMS_PER_PAGE = 15
+        total_items = len(data["templates"])
+        total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+        page = max(0, min(page, total_pages - 1))
+        context.user_data['page'] = page
+        context.user_data['data'] = data
+        context.user_data['data_type'] = 'template'
 
-    start_idx = page * ITEMS_PER_PAGE
-    end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
-    items = data["templates"][start_idx:end_idx]
+        start_idx = page * ITEMS_PER_PAGE
+        end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
+        items = data["templates"][start_idx:end_idx]
 
-    keyboard = [[InlineKeyboardButton(f"📄 {q['question']}", callback_data=f'edit_template_question_{q["id"]}')] for q in items]
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'edit_template_page_{page-1}'))
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'edit_template_page_{page+1}'))
-    nav_buttons.append(InlineKeyboardButton("🚪 Отмена", callback_data='cancel_template_edit'))
-    keyboard.append(nav_buttons)
+        keyboard = []
+        for item in items:
+            if not isinstance(item, dict) or "question" not in item or "id" not in item:
+                logger.error(f"Неверные данные шаблона: {item}")
+                continue
+            question_text = item["question"][:100] if len(item["question"]) > 100 else item["question"]
+            callback_data = f'edit_template_question_{item["id"]}'
+            logger.info(f"Сформирована кнопка редактирования: callback_data={callback_data}, вопрос={question_text}")
+            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=callback_data)])
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    text = f"✏️ Выберите шаблон для редактирования (страница {page + 1}/{total_pages}):"
-    if update.message:
-        update.message.reply_text(text, reply_markup=reply_markup)
-    elif update.callback_query:
-        update.callback_query.message.edit_text(text, reply_markup=reply_markup)
-    logger.info(f"User {update.effective_user.id} viewed template edit page {page + 1}")
-    context.user_data['conversation_state'] = 'EDIT_TEMPLATE_PAGE'
-    return TEMPLATE_EDIT_QUESTION
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f'edit_template_page_{page-1}'))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'edit_template_page_{page+1}'))
+        nav_buttons.append(InlineKeyboardButton("🚪 Отмена", callback_data='cancel_template_edit'))
+        keyboard.append(nav_buttons)
 
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"✏️ Выберите шаблон для редактирования (страница {page + 1}/{total_pages}):"
+        if update.message:
+            update.message.reply_text(text, reply_markup=reply_markup, quote=False)
+        elif update.callback_query:
+            update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+        logger.info(f"Пользователь {update.effective_user.id} просмотрел страницу редактирования шаблонов {page + 1}")
+        context.user_data['conversation_state'] = 'EDIT_TEMPLATE_PAGE'
+        return TEMPLATE_EDIT_QUESTION
+    except Exception as e:
+        logger.error(f"Ошибка в display_template_edit_page для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
+        if update.message:
+            update.message.reply_text(
+                "❌ Ошибка при отображении страницы редактирования. Попробуйте снова.",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+        elif update.callback_query:
+            update.callback_query.message.reply_text(
+                "❌ Ошибка при отображении страницы редактирования. Попробуйте снова.",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+        return ConversationHandler.END
+
+# Обработка пагинации редактирования
 @restrict_access
 def handle_edit_pagination(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
-    data_type = query.data.split('_')[1]
-    if query.data == f'cancel_{data_type}_edit':
+    try:
+        data_type = query.data.split('_')[1]
+        logger.info(f"Пользователь {update.effective_user.id} в handle_edit_pagination, callback_data: {query.data}")
+        if query.data == f'cancel_{data_type}_edit':
+            context.user_data.clear()
+            context.user_data['conversation_state'] = f'CANCEL_{data_type.upper()}_EDIT'
+            context.user_data['conversation_active'] = False
+            query.message.reply_text(
+                f"🚪 Редактирование {'пункта' if data_type == 'guide' else 'шаблона'} отменено.",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+            return ConversationHandler.END
+        page = int(query.data.split('_')[3])
+        data = context.user_data.get('data', load_data(data_type))
+        if data_type == 'guide':
+            display_guide_edit_page(update, context, data, page)
+            return GUIDE_EDIT_QUESTION
+        else:
+            display_template_edit_page(update, context, data, page)
+            return TEMPLATE_EDIT_QUESTION
+    except Exception as e:
+        logger.error(f"Ошибка в handle_edit_pagination для пользователя {update.effective_user.id}: {e}", exc_info=True)
         context.user_data.clear()
-        context.user_data['conversation_state'] = f'CANCEL_{data_type.upper()}_EDIT'
+        context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
-        query.message.reply_text(f"🚪 Редактирование {'пункта' if data_type == 'guide' else 'шаблона'} отменено.", reply_markup=MAIN_MENU)
+        query.message.reply_text(
+            "❌ Ошибка при переключении страницы редактирования. Попробуйте снова.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
         return ConversationHandler.END
-    page = int(query.data.split('_')[3])
-    data = context.user_data.get('data', load_data(data_type))
-    if data_type == 'guide':
-        display_guide_edit_page(update, context, data, page)
-    else:
-        display_template_edit_page(update, context, data, page)
-    context.user_data['conversation_state'] = f'EDIT_{data_type.upper()}_PAGINATION'
-    return GUIDE_EDIT_QUESTION if data_type == 'guide' else TEMPLATE_EDIT_QUESTION
 
+# Выбор вопроса для редактирования
 @restrict_access
 def select_edit_question(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
-    data_type = query.data.split('_')[1]
-    context.user_data['edit_question_id'] = int(query.data.split('_')[3])
-    logger.info(f"User {update.effective_user.id} selected {data_type} ID {context.user_data['edit_question_id']} for editing")
-    context.user_data['conversation_state'] = f'SELECT_EDIT_{data_type.upper()}_QUESTION'
-    keyboard = [
-        [InlineKeyboardButton("Изменить вопрос", callback_data=f'edit_{data_type}_field_question')],
-        [InlineKeyboardButton("Изменить ответ", callback_data=f'edit_{data_type}_field_answer')],
-        [InlineKeyboardButton("Удалить пункт", callback_data=f'edit_{data_type}_field_delete')]
-    ]
-    if ENABLE_PHOTOS:
-        keyboard.insert(2, [InlineKeyboardButton("Добавить/изменить фото", callback_data=f'edit_{data_type}_field_photo')])
-    keyboard.append([InlineKeyboardButton("🚪 Отмена", callback_data=f'cancel_{data_type}_edit')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    query.message.reply_text(f"✏️ Что хотите изменить в {'вопросе' if data_type == 'guide' else 'шаблоне'}?", reply_markup=reply_markup)
-    return GUIDE_EDIT_FIELD if data_type == 'guide' else TEMPLATE_EDIT_FIELD
+    try:
+        logger.info(f"Пользователь {update.effective_user.id} вошел в select_edit_question с callback_data: {query.data}")
+        data_type = query.data.split('_')[1]
+        question_id = int(query.data.split('_')[3])
+        context.user_data['edit_question_id'] = question_id
+        logger.info(f"Пользователь {update.effective_user.id} выбрал для редактирования {data_type} ID {question_id}")
+        context.user_data['conversation_state'] = f'SELECT_EDIT_{data_type.upper()}_QUESTION'
+        keyboard = [
+            [InlineKeyboardButton("Изменить вопрос", callback_data=f'edit_{data_type}_field_question')],
+            [InlineKeyboardButton("Изменить ответ", callback_data=f'edit_{data_type}_field_answer')],
+            [InlineKeyboardButton("Удалить пункт", callback_data=f'edit_{data_type}_field_delete')],
+        ]
+        if ENABLE_PHOTOS:
+            keyboard.insert(2, [InlineKeyboardButton("Добавить/изменить фото", callback_data=f'edit_{data_type}_field_photo')])
+        keyboard.append([InlineKeyboardButton("🚪 Отмена", callback_data=f'cancel_{data_type}_edit')])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.message.edit_text(
+            f"✏️ Что хотите изменить в {'вопросе' if data_type == 'guide' else 'шаблоне'}?",
+            reply_markup=reply_markup
+        )
+        logger.info(f"Пользователь {update.effective_user.id} перешел в состояние {'GUIDE_EDIT_FIELD' if data_type == 'guide' else 'TEMPLATE_EDIT_FIELD'}")
+        return GUIDE_EDIT_FIELD if data_type == 'guide' else TEMPLATE_EDIT_FIELD
+    except Exception as e:
+        logger.error(f"Ошибка в select_edit_question для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
+        query.message.reply_text(
+            "❌ Ошибка при выборе пункта для редактирования. Попробуйте снова.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
+        return ConversationHandler.END
 
+# Обработка выбора поля для редактирования
 @restrict_access
 def receive_edit_field(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
-    data_type = query.data.split('_')[1]
-    if query.data == f'cancel_{data_type}_edit':
+    try:
+        data_type = query.data.split('_')[1]
+        logger.info(f"Пользователь {update.effective_user.id} вошел в receive_edit_field с callback_data: {query.data}")
+        if query.data == f'cancel_{data_type}_edit':
+            context.user_data.clear()
+            context.user_data['conversation_state'] = f'CANCEL_{data_type.upper()}_EDIT'
+            context.user_data['conversation_active'] = False
+            query.message.reply_text(
+                f"🚪 Редактирование {'пункта' if data_type == 'guide' else 'шаблона'} отменено.",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+            return ConversationHandler.END
+        context.user_data['edit_field'] = query.data
+        logger.info(f"Пользователь {update.effective_user.id} выбрал поле для редактирования {data_type}: {query.data}")
+        context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_EDIT_FIELD'
+        if query.data == f'edit_{data_type}_field_delete':
+            data = load_data(data_type)
+            key = 'questions' if data_type == 'guide' else 'templates'
+            question_id = context.user_data['edit_question_id']
+            data[key] = [q for q in data[key] if q["id"] != question_id]
+            save_data(data_type, data)
+            context.user_data.clear()
+            context.user_data['conversation_state'] = f'{data_type.upper()}_POINT_DELETED'
+            context.user_data['conversation_active'] = False
+            query.message.reply_text(
+                f"🗑️ {'Пункт' if data_type == 'guide' else 'Шаблон'} удалён!",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+            logger.info(f"Пользователь {update.effective_user.id} удалил {data_type} ID {question_id}")
+            return ConversationHandler.END
+        field = "вопрос" if query.data == f'edit_{data_type}_field_question' else "ответ" if query.data == f'edit_{data_type}_field_answer' else "фото/альбом"
+        prompt = f"✏️ Введите новый {field}:\n(Напишите /cancel для отмены)"
+        query.message.reply_text(
+            prompt,
+            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+            quote=False
+        )
+        logger.info(f"Пользователь {update.effective_user.id} перешел в состояние {'GUIDE_EDIT_VALUE' if data_type == 'guide' else 'TEMPLATE_EDIT_VALUE'}")
+        return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
+    except Exception as e:
+        logger.error(f"Ошибка в receive_edit_field для пользователя {update.effective_user.id}: {e}", exc_info=True)
         context.user_data.clear()
-        context.user_data['conversation_state'] = f'CANCEL_{data_type.upper()}_EDIT'
+        context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
-        query.message.reply_text(f"🚪 Редактирование {'пункта' if data_type == 'guide' else 'шаблона'} отменено.", reply_markup=MAIN_MENU)
+        query.message.reply_text(
+            "❌ Ошибка при выборе поля для редактирования. Попробуйте снова.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
         return ConversationHandler.END
-    context.user_data['edit_field'] = query.data
-    logger.info(f"User {update.effective_user.id} chose to edit {data_type} field: {query.data}")
-    context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_EDIT_FIELD'
-    if query.data == f'edit_{data_type}_field_delete':
-        data = load_data(data_type)
-        key = 'questions' if data_type == 'guide' else 'templates'
-        question_id = context.user_data['edit_question_id']
-        data[key] = [q for q in data[key] if q["id"] != question_id]
-        save_data(data_type, data)
-        context.user_data.clear()
-        context.user_data['conversation_state'] = f'{data_type.upper()}_POINT_DELETED'
-        context.user_data['conversation_active'] = False
-        query.message.reply_text(f"🗑️ {'Пункт' if data_type == 'guide' else 'Шаблон'} удалён!", reply_markup=MAIN_MENU)
-        return ConversationHandler.END
-    field = "вопрос" if query.data == f'edit_{data_type}_field_question' else "ответ" if query.data == f'edit_{data_type}_field_answer' else "фото/альбом"
-    prompt = f"✏️ Введите новый {field}:\n(Напишите /cancel для отмены)"
-    query.message.reply_text(
-        prompt,
-        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
-    )
-    return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
 
+# Обработка значения для редактирования
 @restrict_access
 def receive_edit_value(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False):
-        logger.warning(f"User {update.effective_user.id} attempted to provide edit value in inactive conversation")
+        logger.warning(f"Пользователь {update.effective_user.id} попытался отправить значение для редактирования в неактивном диалоге")
         update.message.reply_text(
             f"❌ Пожалуйста, начните редактирование {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
-            reply_markup=MAIN_MENU
+            reply_markup=MAIN_MENU,
+            quote=False
         )
         context.user_data.clear()
         context.user_data['conversation_state'] = 'INVALID_EDIT_VALUE'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
     data_type = context.user_data.get('data_type', 'guide')
-    data = load_data(data_type)
-    key = 'questions' if data_type == 'guide' else 'templates'
-    question_id = context.user_data['edit_question_id']
-    field = context.user_data['edit_field']
-    for q in data[key]:
-        if q["id"] == question_id:
-            if field == f'edit_{data_type}_field_question':
-                q['question'] = update.message.text
-            elif field == f'edit_{data_type}_field_answer':
-                q['answer'] = update.message.text
-            elif field == f'edit_{data_type}_field_photo' and ENABLE_PHOTOS:
-                if update.message.photo:
-                    q['photos'] = [update.message.photo[-1].file_id]
-                    logger.info(f"User {update.effective_user.id} updated photo(s) for {data_type} ID {question_id}: {q['photos']}")
-                    q.pop('photo', None)
-                else:
-                    update.message.reply_text(
-                        f"❌ Пожалуйста, отправьте фото или альбом!\n(Напишите /cancel для отмены)",
-                        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
-                    )
-                    return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
-            break
-    save_data(data_type, data)
-    logger.info(f"User {update.effective_user.id} updated {field} for {data_type} ID {question_id}")
-    context.user_data.clear()
-    context.user_data['conversation_state'] = f'EDIT_{data_type.upper()}_VALUE'
-    context.user_data['conversation_active'] = False
-    update.message.reply_text(
-        f"✏️ {field.replace(f'edit_{data_type}_field_', '').capitalize()} обновлён!",
-        reply_markup=MAIN_MENU
-    )
-    return ConversationHandler.END
+    try:
+        data = load_data(data_type)
+        key = 'questions' if data_type == 'guide' else 'templates'
+        question_id = context.user_data['edit_question_id']
+        field = context.user_data['edit_field']
+        for q in data[key]:
+            if q["id"] == question_id:
+                if field == f'edit_{data_type}_field_question':
+                    q['question'] = update.message.text
+                    logger.info(f"Пользователь {update.effective_user.id} обновил вопрос для {data_type} ID {question_id}: {q['question']}")
+                elif field == f'edit_{data_type}_field_answer':
+                    q['answer'] = update.message.text
+                    logger.info(f"Пользователь {update.effective_user.id} обновил ответ для {data_type} ID {question_id}: {q['answer']}")
+                elif field == f'edit_{data_type}_field_photo' and ENABLE_PHOTOS:
+                    if update.message.photo:
+                        q['photos'] = [update.message.photo[-1].file_id]
+                        logger.info(f"Пользователь {update.effective_user.id} обновил фото для {data_type} ID {question_id}: {q['photos']}")
+                        q.pop('photo', None)
+                    else:
+                        update.message.reply_text(
+                            f"❌ Пожалуйста, отправьте фото или альбом!\n(Напишите /cancel для отмены)",
+                            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                            quote=False
+                        )
+                        return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
+                break
+        save_data(data_type, data)
+        logger.info(f"Пользователь {update.effective_user.id} обновил {field} для {data_type} ID {question_id}")
+        context.user_data.clear()
+        context.user_data['conversation_state'] = f'EDIT_{data_type.upper()}_VALUE'
+        context.user_data['conversation_active'] = False
+        update.message.reply_text(
+            f"✏️ {'Вопрос' if field == f'edit_{data_type}_field_question' else 'Ответ' if field == f'edit_{data_type}_field_answer' else 'Фото'} обновлён!",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Ошибка в receive_edit_value для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
+        update.message.reply_text(
+            "❌ Ошибка при обновлении значения. Попробуйте снова.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
+        return ConversationHandler.END
 
 # Обработчик неподдерживаемых сообщений
 @restrict_access
 def handle_invalid_input(update: Update, context: CallbackContext):
-    logger.warning(f"User {update.effective_user.id} sent invalid input in conversation state")
+    logger.warning(f"Пользователь {update.effective_user.id} отправил неподдерживаемый ввод в состоянии диалога: {context.user_data.get('conversation_state')}")
     data_type = context.user_data.get('data_type', 'guide')
     context.user_data.clear()
     context.user_data['conversation_state'] = 'INVALID_INPUT'
     context.user_data['conversation_active'] = False
     update.message.reply_text(
         f"❌ Пожалуйста, отправьте текст или фото/альбом (для ответа/фото)!\n(Напишите /cancel для отмены)",
-        reply_markup=MAIN_MENU
+        reply_markup=MAIN_MENU,
+        quote=False
     )
     return ConversationHandler.END
-
-# Обработчик для отладки текстовых сообщений
-@restrict_access
-def debug_text(update: Update, context: CallbackContext):
-    logger.info(f"User {update.effective_user.id} sent text: '{update.message.text}'")
-    current_state = context.user_data.get('conversation_state', 'NONE')
-    logger.info(f"Current conversation state: {current_state}")
-    if context.user_data.get('conversation_active', False):
-        logger.info(f"User {update.effective_user.id} is in active conversation state {current_state}, skipping perform_search")
-        return
-    menu_pattern = r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'
-    if re.match(menu_pattern, update.message.text):
-        logger.info(f"User {update.effective_user.id} sent menu command: '{update.message.text}', skipping perform_search")
-        return
-    context.user_data.clear()
-    context.user_data['conversation_state'] = 'SEARCH'
-    context.user_data['conversation_active'] = False
-    perform_search(update, context)
 
 # Запуск бота
 def main():
     updater = Updater(os.getenv("BOT_TOKEN"), use_context=True)
     dp = updater.dispatcher
     dp.add_error_handler(error_handler)
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("cancel", cancel))
-    dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
-    dp.add_handler(MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), open_templates))
-    dp.add_handler(MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point))
-    dp.add_handler(MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point))
+
+    # Регистрация ConversationHandler'ов в начале для повышения приоритета
     guide_add_conv = ConversationHandler(
         entry_points=[MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point)],
         states={
             GUIDE_QUESTION: [
                 MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command,
                     receive_question
                 ),
             ],
             GUIDE_ANSWER: [
                 MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command,
                     receive_answer
                 ),
                 MessageHandler(Filters.photo, receive_answer) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
             ],
             GUIDE_ANSWER_PHOTOS: [
                 MessageHandler(Filters.photo, receive_answer_photos) if ENABLE_PHOTOS else None,
                 MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command,
                     receive_answer
                 ),
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
-            ]
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+            ],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
         per_chat=True,
-        allow_reentry=False
+        allow_reentry=False,
     )
-    dp.add_handler(guide_add_conv)
+
     template_add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_template, pattern='^add_template$')],
         states={
             TEMPLATE_QUESTION: [
                 MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command,
                     receive_question
                 ),
             ],
             TEMPLATE_ANSWER: [
                 MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command,
                     receive_answer
                 ),
                 MessageHandler(Filters.photo, receive_answer) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
             ],
             TEMPLATE_ANSWER_PHOTOS: [
                 MessageHandler(Filters.photo, receive_answer_photos) if ENABLE_PHOTOS else None,
                 MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command,
                     receive_answer
                 ),
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
-            ]
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+            ],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
         per_chat=True,
-        allow_reentry=False
+        allow_reentry=False,
     )
-    dp.add_handler(template_add_conv)
+
     guide_edit_conv = ConversationHandler(
         entry_points=[MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point)],
         states={
             GUIDE_EDIT_QUESTION: [
-                CallbackQueryHandler(select_edit_question, pattern='^edit_guide_question_.*$'),
-                CallbackQueryHandler(handle_edit_pagination, pattern='^(edit_guide_page_.*|cancel_guide_edit)$')
+                CallbackQueryHandler(select_edit_question, pattern=r'^edit_guide_question_\d+$'),
+                CallbackQueryHandler(handle_edit_pagination, pattern=r'^(edit_guide_page_\d+|cancel_guide_edit)$'),
             ],
             GUIDE_EDIT_FIELD: [
-                CallbackQueryHandler(receive_edit_field, pattern='^(edit_guide_field_.*|cancel_guide_edit)$')
+                CallbackQueryHandler(receive_edit_field, pattern=r'^(edit_guide_field_(question|answer|photo|delete)|cancel_guide_edit)$'),
             ],
             GUIDE_EDIT_VALUE: [
                 MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command,
                     receive_edit_value
                 ),
                 MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
-            ]
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+            ],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
         per_chat=True,
         per_message=False,
-        allow_reentry=False
+        allow_reentry=False,
     )
-    dp.add_handler(guide_edit_conv)
+
     template_edit_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(edit_template, pattern='^edit_template$')],
         states={
             TEMPLATE_EDIT_QUESTION: [
-                CallbackQueryHandler(select_edit_question, pattern='^edit_template_question_.*$'),
-                CallbackQueryHandler(handle_edit_pagination, pattern='^(edit_template_page_.*|cancel_template_edit)$')
+                CallbackQueryHandler(select_edit_question, pattern=r'^edit_template_question_\d+$'),
+                CallbackQueryHandler(handle_edit_pagination, pattern=r'^(edit_template_page_\d+|cancel_template_edit)$'),
             ],
             TEMPLATE_EDIT_FIELD: [
-                CallbackQueryHandler(receive_edit_field, pattern='^(edit_template_field_.*|cancel_template_edit)$')
+                CallbackQueryHandler(receive_edit_field, pattern=r'^(edit_template_field_(question|answer|photo|delete)|cancel_template_edit)$'),
             ],
             TEMPLATE_EDIT_VALUE: [
                 MessageHandler(
-                    Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+                    Filters.text & ~Filters.command,
                     receive_edit_value
                 ),
                 MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input)
-            ]
+                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+            ],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
         per_chat=True,
         per_message=False,
-        allow_reentry=False
+        allow_reentry=False,
     )
-    dp.add_handler(template_edit_conv)
-    dp.add_handler(CallbackQueryHandler(handle_pagination, pattern='^(guide|template)_page_.*$'))
-    dp.add_handler(CallbackQueryHandler(show_answer, pattern='^(guide|template)_question_.*$'))
-    dp.add_handler(CallbackQueryHandler(handle_template_action, pattern='^(add_template|edit_template|cancel_template)$'))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, debug_text))
 
-    logger.info("Bot is running...")
+    # Регистрация ConversationHandler'ов
+    dp.add_handler(guide_add_conv)
+    dp.add_handler(template_add_conv)
+    dp.add_handler(guide_edit_conv)
+    dp.add_handler(template_edit_conv)
+
+    # Регистрация основных команд
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("cancel", cancel))
+
+    # Регистрация обработчиков меню
+    dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
+    dp.add_handler(MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), open_templates))
+    dp.add_handler(MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point))
+    dp.add_handler(MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point))
+
+    # Регистрация обработчиков callback-запросов
+    dp.add_handler(CallbackQueryHandler(handle_pagination, pattern=r'^(guide|template)_page_\d+$'))
+    dp.add_handler(CallbackQueryHandler(show_answer, pattern=r'^(guide|template)_question_\d+$'))
+    dp.add_handler(CallbackQueryHandler(handle_template_action, pattern='^(add_template|edit_template|cancel_template)$'))
+
+    # Регистрация обработчика поиска
+    dp.add_handler(MessageHandler(
+        Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'),
+        perform_search
+    ))
+
+    logger.info("Бот запущен...")
     updater.start_polling(allowed_updates=Update.ALL_TYPES)
     updater.idle()
 
@@ -1118,6 +1358,6 @@ if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        logger.info("Received KeyboardInterrupt, shutting down...")
+        logger.info("Получен KeyboardInterrupt, завершение работы...")
     except Exception as e:
-        logger.error(f"Error running bot: {e}", exc_info=True)
+        logger.error(f"Ошибка запуска бота: {e}", exc_info=True)
