@@ -14,6 +14,9 @@ from telegram.ext import (
     CallbackContext,
 )
 
+# Максимальная длина текста кнопки (в символах) для выравнивания
+MAX_BUTTON_TEXT_LENGTH = 80
+
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -118,8 +121,11 @@ def sync_with_github():
 # Проверка доступа
 def restrict_access(func):
     def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-        user_id = update.effective_user.id
-        logger.info(f"Проверка доступа для user_id: {user_id}")
+        user = update.effective_user
+        user_id = user.id
+        # Формируем имя пользователя для логов
+        user_display = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip() or f"ID {user_id}"
+        logger.info(f"Проверка доступа для пользователя {user_display} (ID: {user_id})")
         users = load_users()
         logger.info(f"Разрешенные пользователи: {users}")
         if user_id not in users:
@@ -128,8 +134,10 @@ def restrict_access(func):
                 update.message.reply_text(error_msg, reply_markup=MAIN_MENU)
             elif update.callback_query:
                 update.callback_query.message.reply_text(error_msg, reply_markup=MAIN_MENU)
-            logger.warning(f"Попытка несанкционированного доступа пользователем {user_id}")
+            logger.warning(f"Попытка несанкционированного доступа пользователем {user_display} (ID: {user_id})")
             return
+        # Сохраняем информацию о пользователе в context.user_data для других функций
+        context.user_data['user_display'] = user_display
         return func(update, context, *args, **kwargs)
     return wrapper
 
@@ -155,7 +163,8 @@ def error_handler(update: Update, context: CallbackContext):
 # Команда /start
 @restrict_access
 def start(update: Update, context: CallbackContext):
-    logger.info(f"Пользователь {update.effective_user.id} запустил бот")
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} запустил бот")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'START'
     context.user_data['conversation_active'] = False
@@ -168,11 +177,12 @@ def start(update: Update, context: CallbackContext):
 # Команда /cancel
 @restrict_access
 def cancel(update: Update, context: CallbackContext):
-    logger.info(f"Пользователь {update.effective_user.id} отменил диалог")
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} отменил диалог")
     if context.user_data.get('timeout_task'):
         context.user_data['timeout_task'].cancel()
         context.user_data['timeout_task'] = None
-        logger.info(f"Пользователь {update.effective_user.id} отменил задачу таймаута")
+        logger.info(f"Пользователь {user_display} отменил задачу таймаута")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'CANCELLED'
     context.user_data['conversation_active'] = False
@@ -185,7 +195,8 @@ def cancel(update: Update, context: CallbackContext):
 # Открытие справочника
 @restrict_access
 def open_guide(update: Update, context: CallbackContext):
-    logger.info(f"Пользователь {update.effective_user.id} открыл справочник")
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} открыл справочник")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'OPEN_GUIDE'
     context.user_data['conversation_active'] = False
@@ -204,7 +215,8 @@ def open_guide(update: Update, context: CallbackContext):
 # Открытие шаблонов
 @restrict_access
 def open_templates(update: Update, context: CallbackContext):
-    logger.info(f"Пользователь {update.effective_user.id} открыл шаблоны")
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} открыл шаблоны")
     context.user_data.clear()
     context.user_data['conversation_state'] = 'OPEN_TEMPLATE'
     context.user_data['conversation_active'] = False
@@ -245,8 +257,12 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
             if not isinstance(item, dict) or "question" not in item or "id" not in item:
                 logger.error(f"Неверные данные справочника: {item}")
                 continue
-            question_text = item["question"][:100] if len(item["question"]) > 100 else item["question"]
-            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'{data_type}_question_{item["id"]}')])
+            # Обрезаем текст вопроса до 50 символов, чтобы оставить место для выравнивания
+            question_text = item["question"][:50] if len(item["question"]) > 50 else item["question"]
+            # Добавляем неразрывные пробелы для выравнивания по левому краю
+            padded_text = f"📄 {question_text}" + "\u00A0" * (MAX_BUTTON_TEXT_LENGTH - len(f"📄 {question_text}"))
+            logger.debug(f"Сформирована кнопка справочника: '{padded_text}' (длина: {len(padded_text)})")
+            keyboard.append([InlineKeyboardButton(padded_text, callback_data=f'{data_type}_question_{item["id"]}')])
 
         nav_buttons = []
         if page > 0:
@@ -263,13 +279,15 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
         elif update.callback_query:
             update.callback_query.message.edit_text(text, reply_markup=reply_markup)
 
-        logger.info(f"Пользователь {update.effective_user.id} просмотрел страницу справочника {page + 1}")
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.info(f"Пользователь {user_display} просмотрел страницу справочника {page + 1}")
         context.user_data['conversation_state'] = f'{data_type.upper()}_PAGE'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"Ошибка в display_guide_page для пользователя {update.effective_user.id}: {str(e)}", exc_info=True)
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.error(f"Ошибка в display_guide_page для пользователя {user_display}: {str(e)}", exc_info=True)
         if update.message:
             update.message.reply_text(
                 "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
@@ -302,8 +320,12 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
             if not isinstance(item, dict) or "question" not in item or "id" not in item:
                 logger.error(f"Неверные данные шаблона: {item}")
                 continue
-            question_text = item["question"][:100] if len(item["question"]) > 100 else item["question"]
-            keyboard.append([InlineKeyboardButton(f"📄 {question_text}", callback_data=f'template_question_{item["id"]}')])
+            # Обрезаем текст вопроса до 50 символов, чтобы оставить место для выравнивания
+            question_text = item["question"][:50] if len(item["question"]) > 50 else item["question"]
+            # Добавляем неразрывные пробелы для выравнивания по левому краю
+            padded_text = f"📄 {question_text}" + "\u00A0" * (MAX_BUTTON_TEXT_LENGTH - len(f"📄 {question_text}"))
+            logger.debug(f"Сформирована кнопка шаблона: '{padded_text}' (длина: {len(padded_text)})")
+            keyboard.append([InlineKeyboardButton(padded_text, callback_data=f'template_question_{item["id"]}')])
 
         nav_buttons = []
         if page > 0:
@@ -325,13 +347,15 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
         elif update.callback_query:
             update.callback_query.message.edit_text(text, reply_markup=reply_markup)
 
-        logger.info(f"Пользователь {update.effective_user.id} просмотрел страницу шаблонов {page + 1}")
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.info(f"Пользователь {user_display} просмотрел страницу шаблонов {page + 1}")
         context.user_data['conversation_state'] = 'TEMPLATE_PAGE'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"Ошибка в display_template_page для пользователя {update.effective_user.id}: {str(e)}", exc_info=True)
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.error(f"Ошибка в display_template_page для пользователя {user_display}: {str(e)}", exc_info=True)
         if update.message:
             update.message.reply_text(
                 "❌ Произошла ошибка при отображении страницы. Попробуйте снова или свяжитесь с администратором.",
