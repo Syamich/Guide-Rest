@@ -435,21 +435,46 @@ def show_answer(update: Update, context: CallbackContext):
             chat_id = query.message.chat_id
             if ENABLE_PHOTOS and photo_ids:
                 if len(photo_ids) == 1:
+                    logger.debug(f"Отправка одного фото для {data_type} ID {question_id}")
                     message = query.message.reply_photo(
                         photo=photo_ids[0],
                         caption=response,
-                        reply_markup=reply_markup
+                        reply_markup=reply_markup,
+                        parse_mode=None
                     )
                     message_ids.append(message.message_id)
                 else:
-                    media = [InputMediaPhoto(media=photo_id, caption=response if i == 0 else None, reply_markup=reply_markup if i == 0 else None) for i, photo_id in enumerate(photo_ids)]
+                    logger.debug(f"Отправка текстового сообщения и группы медиа с {len(photo_ids)} фото для {data_type} ID {question_id}")
+                    # Отправляем текстовое сообщение с ответом и кнопкой
+                    text_message = query.message.reply_text(
+                        response,
+                        reply_markup=reply_markup,
+                        parse_mode=None
+                    )
+                    message_ids.append(text_message.message_id)
+                    # Задержка для последовательности отправки
+                    asyncio.run(asyncio.sleep(0.1))
+                    # Отправляем группу медиа без caption
+                    media = [
+                        InputMediaPhoto(
+                            media=photo_id,
+                            parse_mode=None
+                        ) for photo_id in photo_ids
+                    ]
                     messages = query.message.reply_media_group(media=media)
                     message_ids.extend([msg.message_id for msg in messages])
+                    logger.debug(f"Отправлена группа медиа с сообщениями {[msg.message_id for msg in messages]}")
             else:
-                message = query.message.reply_text(response, reply_markup=reply_markup)
+                logger.debug(f"Отправка текстового ответа для {data_type} ID {question_id}")
+                message = query.message.reply_text(
+                    response,
+                    reply_markup=reply_markup,
+                    parse_mode=None
+                )
                 message_ids.append(message.message_id)
             # Сохраняем message_ids для удаления
             context.user_data['answer_message_ids'] = message_ids
+            logger.info(f"Отправлены сообщения {message_ids} для пользователя {user_display}")
             # Планируем автоматическое удаление через 30 минут (1800 секунд)
             context.job_queue.run_once(
                 schedule_message_deletion,
@@ -458,7 +483,11 @@ def show_answer(update: Update, context: CallbackContext):
             )
             logger.info(f"Запланировано автоматическое удаление сообщений {message_ids} через 30 минут для пользователя {user_display}")
         else:
-            query.message.reply_text(f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!", reply_markup=MAIN_MENU)
+            logger.warning(f"Вопрос/шаблон с ID {question_id} не найден для пользователя {user_display}")
+            query.message.reply_text(
+                f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!",
+                reply_markup=MAIN_MENU
+            )
         context.user_data['conversation_state'] = f'SHOW_{data_type.upper()}_ANSWER'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
@@ -1443,8 +1472,8 @@ def main():
 def clear_chat(context: CallbackContext, chat_id: int, message_id: int, user_display: str):
     try:
         logger.info(f"Пользователь {user_display} инициировал фоновую очистку чата {chat_id}")
-        # Ограничиваем количество удаляемых сообщений до 10
-        for i in range(message_id - 1, max(message_id - 10, 1), -1):
+        # Ограничиваем количество удаляемых сообщений до 15
+        for i in range(message_id - 1, max(message_id - 15, 1), -1):
             try:
                 context.bot.delete_message(chat_id=chat_id, message_id=i)
                 # Задержка 0.2 секунды для соблюдения лимитов Telegram API
