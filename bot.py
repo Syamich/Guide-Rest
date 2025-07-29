@@ -5,6 +5,7 @@ import subprocess
 import logging
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import ReplyKeyboardRemove
 from telegram.ext import (
     Updater,
     CommandHandler,
@@ -1274,21 +1275,38 @@ def receive_edit_value(update: Update, context: CallbackContext):
             return ConversationHandler.END
 
         if field == f'edit_{data_type}_field_photo':
-            if update.message.photo:
+            if update.message and update.message.photo:
                 # Инициализируем список edit_photos, если его нет
                 if 'edit_photos' not in context.user_data:
                     context.user_data['edit_photos'] = item.get('photos', []) or []
-                # Добавляем новую фотографию в список
-                new_photo_id = update.message.photo[-1].file_id
-                context.user_data['edit_photos'].append(new_photo_id)
-                logger.info(f"Пользователь {user_display} добавил фото в {data_type} ID {question_id}: {new_photo_id}")
+                # Добавляем новую фотографию
+                context.user_data['edit_photos'].append(update.message.photo[-1].file_id)
+                logger.info(f"Пользователь {user_display} добавил фото в {data_type} ID {question_id}: {update.message.photo[-1].file_id}")
                 update.message.reply_text(
                     "Фотография добавлена. Отправьте ещё фото или нажмите 'Завершить', чтобы сохранить изменения.",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("Завершить", callback_data=f'complete_edit_{data_type}_photo')
                     ]])
                 )
-                return GUIDE_EDIT_VALUE
+                return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
+            elif update.callback_query and update.callback_query.data == f'complete_edit_{data_type}_photo':
+                # Завершаем редактирование фотографий
+                update.callback_query.answer()
+                if 'edit_photos' in context.user_data:
+                    item['photos'] = context.user_data['edit_photos']
+                    logger.info(f"Пользователь {user_display} обновил фото для {data_type} ID {question_id}: {item['photos']}")
+                else:
+                    item['photos'] = item.get('photos', [])
+                    logger.info(f"Пользователь {user_display} завершил редактирование без новых фото для {data_type} ID {question_id}")
+                save_data(data_type, data)
+                update.callback_query.message.reply_text(
+                    f"Фотографии для {'вопроса' if data_type == 'guide' else 'шаблона'} обновлены!",
+                    reply_markup=MAIN_MENU
+                )
+                context.user_data.clear()
+                context.user_data['conversation_state'] = f'{data_type.upper()}_PHOTOS_UPDATED'
+                context.user_data['conversation_active'] = False
+                return ConversationHandler.END
             else:
                 update.message.reply_text(
                     "Пожалуйста, отправьте фотографию или нажмите 'Завершить'.",
@@ -1296,48 +1314,36 @@ def receive_edit_value(update: Update, context: CallbackContext):
                         InlineKeyboardButton("Завершить", callback_data=f'complete_edit_{data_type}_photo')
                     ]])
                 )
-                return GUIDE_EDIT_VALUE
-        elif field == f'complete_edit_{data_type}_photo':
-            # Завершаем редактирование фотографий
-            if 'edit_photos' in context.user_data:
-                item['photos'] = context.user_data['edit_photos']
-                logger.info(f"Пользователь {user_display} обновил фото для {data_type} ID {question_id}: {item['photos']}")
-            else:
-                item['photos'] = item.get('photos', [])
-                logger.info(f"Пользователь {user_display} завершил редактирование без новых фото для {data_type} ID {question_id}")
-            save_data(data, data_type)
-            update.message.reply_text(
-                f"Фотографии для {'вопроса' if data_type == 'guide' else 'шаблона'} обновлены!",
-                reply_markup=MAIN_MENU
-            )
-            context.user_data.clear()
-            return ConversationHandler.END
+                return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
         else:
             # Обработка текстовых полей (question, answer)
             if update.message.text:
                 context.user_data['edit_value'] = update.message.text
                 item[field.replace(f'edit_{data_type}_field_', '')] = context.user_data['edit_value']
                 logger.info(f"Пользователь {user_display} обновил {field} для {data_type} ID {question_id}: {context.user_data['edit_value']}")
-                save_data(data, data_type)
+                save_data(data_type, data)
                 update.message.reply_text(
                     f"{'Вопрос' if field == f'edit_{data_type}_field_question' else 'Ответ'} обновлён!",
                     reply_markup=MAIN_MENU
                 )
+                context.user_data.clear()
+                context.user_data['conversation_state'] = f'{data_type.upper()}_FIELD_UPDATED'
+                context.user_data['conversation_active'] = False
+                return ConversationHandler.END
             else:
                 update.message.reply_text(
-                    f"Пожалуйста, введите {'вопрос' if field == f'edit_{data_type}_field_question' else 'ответ'}.",
-                    reply_markup=ReplyKeyboardRemove()
+                    f"Пожалуйста, введите {'вопрос' if field == f'edit_{data_type}_field_question' else 'ответ'}."
                 )
-                return GUIDE_EDIT_VALUE
-            context.user_data.clear()
-            return ConversationHandler.END
+                return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
     except Exception as e:
         logger.error(f"Ошибка в receive_edit_value для пользователя {user_display}: {e}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
         update.message.reply_text(
             "❌ Ошибка при редактировании. Попробуйте снова.",
             reply_markup=MAIN_MENU
         )
-        context.user_data.clear()
         return ConversationHandler.END
 
 # Обработчик неподдерживаемых сообщений
