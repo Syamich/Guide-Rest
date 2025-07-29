@@ -204,8 +204,14 @@ def open_guide(update: Update, context: CallbackContext):
         update.message.delete()
     except Exception as e:
         logger.debug(f"Не удалось удалить сообщение пользователя {user_display}: {e}")
-    # Очищаем чат перед отправкой списка
-    asyncio.run(clear_chat(update, context))
+    # Запускаем фоновую очистку чата
+    chat_id = update.effective_chat.id
+    message_id = update.effective_message.message_id
+    context.job_queue.run_once(
+        lambda ctx: clear_chat(ctx, chat_id, message_id, user_display),
+        0,
+        context=None
+    )
     context.user_data.clear()
     context.user_data['conversation_state'] = 'OPEN_GUIDE'
     context.user_data['conversation_active'] = False
@@ -218,10 +224,8 @@ def open_guide(update: Update, context: CallbackContext):
         )
         return ConversationHandler.END
     page = context.user_data.get('page', 0)
-    # Отображаем справочник после очистки с главным меню
+    # Отображаем справочник сразу
     display_guide_page(update, context, guide, page, 'guide')
-    # Принудительно отправляем сообщение с главным меню, чтобы оно осталось видимым
-    update.message.reply_text("Выберите действие:", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
 # Открытие шаблонов
@@ -234,8 +238,14 @@ def open_templates(update: Update, context: CallbackContext):
         update.message.delete()
     except Exception as e:
         logger.debug(f"Не удалось удалить сообщение пользователя {user_display}: {e}")
-    # Очищаем чат перед отправкой списка
-    asyncio.run(clear_chat(update, context))
+    # Запускаем фоновую очистку чата
+    chat_id = update.effective_chat.id
+    message_id = update.effective_message.message_id
+    context.job_queue.run_once(
+        lambda ctx: clear_chat(ctx, chat_id, message_id, user_display),
+        0,
+        context=None
+    )
     context.user_data.clear()
     context.user_data['conversation_state'] = 'OPEN_TEMPLATE'
     context.user_data['conversation_active'] = False
@@ -251,14 +261,10 @@ def open_templates(update: Update, context: CallbackContext):
             "📋 Шаблоны ответов пусты. Добавьте первый шаблон!",
             reply_markup=reply_markup
         )
-        # Принудительно отправляем сообщение с главным меню
-        update.message.reply_text("Выберите действие:", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     page = context.user_data.get('page', 0)
-    # Отображаем шаблоны после очистки
+    # Отображаем шаблоны сразу
     display_template_page(update, context, templates, page)
-    # Принудительно отправляем сообщение с главным меню, чтобы оно осталось видимым
-    update.message.reply_text("Выберите действие:", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
 # Отображение страницы справочника
@@ -281,9 +287,7 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
             if not isinstance(item, dict) or "question" not in item or "id" not in item:
                 logger.error(f"Неверные данные справочника: {item}")
                 continue
-            # Обрезаем текст вопроса до 50 символов, чтобы оставить место для выравнивания
             question_text = item["question"][:50] if len(item["question"]) > 50 else item["question"]
-            # Добавляем точки для визуального выравнивания по левому краю
             padded_text = f"📄 {question_text}" + "." * (MAX_BUTTON_TEXT_LENGTH - len(f"📄 {question_text}"))
             logger.debug(f"Сформирована кнопка справочника: '{padded_text}' (длина: {len(padded_text)})")
             keyboard.append([InlineKeyboardButton(padded_text, callback_data=f'{data_type}_question_{item["id"]}')])
@@ -295,13 +299,22 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
             nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f'{data_type}_page_{page+1}'))
         keyboard.append(nav_buttons)
 
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        inline_reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"📖 Справочник (страница {page + 1}/{total_pages}):"
 
         if update.message:
-            update.message.reply_text(text, reply_markup=reply_markup)
+            update.message.reply_text(
+                text,
+                reply_markup=inline_reply_markup,  # Инлайн-кнопки
+                reply_to_message_id=None
+            )
+            # Отправляем пустое сообщение с главным меню
+            update.message.reply_text(".", reply_markup=MAIN_MENU)
         elif update.callback_query:
-            update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+            update.callback_query.message.edit_text(
+                text,
+                reply_markup=inline_reply_markup  # Только инлайн-кнопки при пагинации
+            )
 
         user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
         logger.info(f"Пользователь {user_display} просмотрел страницу справочника {page + 1}")
@@ -344,9 +357,7 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
             if not isinstance(item, dict) or "question" not in item or "id" not in item:
                 logger.error(f"Неверные данные шаблона: {item}")
                 continue
-            # Обрезаем текст вопроса до 50 символов, чтобы оставить место для выравнивания
             question_text = item["question"][:50] if len(item["question"]) > 50 else item["question"]
-            # Добавляем точки для визуального выравнивания по левому краю
             padded_text = f"📄 {question_text}" + "." * (MAX_BUTTON_TEXT_LENGTH - len(f"📄 {question_text}"))
             logger.debug(f"Сформирована кнопка шаблона: '{padded_text}' (длина: {len(padded_text)})")
             keyboard.append([InlineKeyboardButton(padded_text, callback_data=f'template_question_{item["id"]}')])
@@ -363,13 +374,22 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
         ])
         keyboard.append(nav_buttons)
 
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        inline_reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"📋 Шаблоны ответов (страница {page + 1}/{total_pages}):"
 
         if update.message:
-            update.message.reply_text(text, reply_markup=reply_markup)
+            update.message.reply_text(
+                text,
+                reply_markup=inline_reply_markup,  # Инлайн-кнопки
+                reply_to_message_id=None
+            )
+            # Отправляем пустое сообщение с главным меню
+            update.message.reply_text(".", reply_markup=MAIN_MENU)
         elif update.callback_query:
-            update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+            update.callback_query.message.edit_text(
+                text,
+                reply_markup=inline_reply_markup  # Только инлайн-кнопки при пагинации
+            )
 
         user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
         logger.info(f"Пользователь {user_display} просмотрел страницу шаблонов {page + 1}")
@@ -392,7 +412,6 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
             )
         return ConversationHandler.END
 
-# Показ ответа
 @restrict_access
 def show_answer(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -423,15 +442,14 @@ def show_answer(update: Update, context: CallbackContext):
                     )
                     message_ids.append(message.message_id)
                 else:
-                    media = [InputMediaPhoto(media=photo_id, caption=response if i == 0 else None) for i, photo_id in enumerate(photo_ids)]
+                    media = [InputMediaPhoto(media=photo_id, caption=response if i == 0 else None, reply_markup=reply_markup if i == 0 else None) for i, photo_id in enumerate(photo_ids)]
                     messages = query.message.reply_media_group(media=media)
                     message_ids.extend([msg.message_id for msg in messages])
-                    # Отправляем отдельное сообщение с кнопкой удаления
-                    message = query.message.reply_text("Выберите действие:", reply_markup=reply_markup)
-                    message_ids.append(message.message_id)
             else:
                 message = query.message.reply_text(response, reply_markup=reply_markup)
                 message_ids.append(message.message_id)
+            # Сохраняем message_ids для удаления
+            context.user_data['answer_message_ids'] = message_ids
             # Планируем автоматическое удаление через 30 минут (1800 секунд)
             context.job_queue.run_once(
                 schedule_message_deletion,
@@ -441,7 +459,6 @@ def show_answer(update: Update, context: CallbackContext):
             logger.info(f"Запланировано автоматическое удаление сообщений {message_ids} через 30 минут для пользователя {user_display}")
         else:
             query.message.reply_text(f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!", reply_markup=MAIN_MENU)
-        context.user_data.clear()
         context.user_data['conversation_state'] = f'SHOW_{data_type.upper()}_ANSWER'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
@@ -1422,26 +1439,22 @@ def main():
     updater.start_polling(allowed_updates=Update.ALL_TYPES)
     updater.idle()
 
-# Очистка чата
-async def clear_chat(update: Update, context: CallbackContext):
+# Очистка чата (фоновая задача)
+def clear_chat(context: CallbackContext, chat_id: int, message_id: int, user_display: str):
     try:
-        chat_id = update.effective_chat.id
-        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-        logger.info(f"Пользователь {user_display} инициировал очистку чата {chat_id}")
-        # Ограничиваем количество удаляемых сообщений до 10
-        message_id = update.effective_message.message_id
-        # Удаляем сообщения до текущего message_id (исключая его)
-        for i in range(message_id - 1, max(message_id - 10, 1), -1):
+        logger.info(f"Пользователь {user_display} инициировал фоновую очистку чата {chat_id}")
+        # Ограничиваем количество удаляемых сообщений до 5
+        for i in range(message_id - 1, max(message_id - 5, 1), -1):
             try:
                 context.bot.delete_message(chat_id=chat_id, message_id=i)
                 # Задержка 0.2 секунды для соблюдения лимитов Telegram API
-                await asyncio.sleep(0.2)
+                asyncio.run(asyncio.sleep(0.2))
             except Exception as e:
                 logger.debug(f"Не удалось удалить сообщение {i} в чате {chat_id}: {e}")
                 continue
-        logger.info(f"Чат {chat_id} очищен пользователем {user_display}")
+        logger.info(f"Чат {chat_id} очищен пользователем {user_display} в фоновом режиме")
     except Exception as e:
-        logger.error(f"Ошибка при очистке чата {chat_id} для пользователя {user_display}: {e}", exc_info=True)
+        logger.error(f"Ошибка при фоновой очистке чата {chat_id} для пользователя {user_display}: {e}", exc_info=True)
 
 # Планирование автоматического удаления сообщения
 def schedule_message_deletion(context: CallbackContext):
@@ -1460,17 +1473,21 @@ def schedule_message_deletion(context: CallbackContext):
         logger.error(f"Ошибка при автоматическом удалении сообщения для пользователя {user_display}: {e}", exc_info=True)
 
 # Обработка нажатия на кнопку удаления ответа
-# Обработка нажатия на кнопку удаления ответа
 @restrict_access
 def delete_answer(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     try:
         chat_id = query.message.chat_id
-        message_id = query.message.message_id
         user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-        context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-        logger.info(f"Пользователь {user_display} удалил сообщение {message_id} в чате {chat_id}")
+        # Удаляем все сообщения, связанные с ответом
+        message_ids = context.user_data.get('answer_message_ids', [query.message.message_id])
+        for message_id in message_ids:
+            try:
+                context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+                logger.info(f"Пользователь {user_display} удалил сообщение {message_id} в чате {chat_id}")
+            except Exception as e:
+                logger.debug(f"Не удалось удалить сообщение {message_id} в чате {chat_id}: {e}")
         context.user_data.clear()
         context.user_data['conversation_state'] = 'DELETE_ANSWER'
         context.user_data['conversation_active'] = False
