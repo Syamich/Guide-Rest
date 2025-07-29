@@ -5,7 +5,6 @@ import subprocess
 import logging
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
-from telegram import ReplyKeyboardRemove
 from telegram.ext import (
     Updater,
     CommandHandler,
@@ -430,51 +429,51 @@ def show_answer(update: Update, context: CallbackContext):
             # Создаём инлайн-кнопку для удаления
             delete_button = InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')
             reply_markup = InlineKeyboardMarkup([[delete_button]])
-            photo_ids = item.get('photos', []) or ([item['photo']] if item.get('photo') else [])
+            photo_ids = item.get('photos', [])  # Получаем список фотографий
             message_ids = []
             chat_id = query.message.chat_id
             if ENABLE_PHOTOS and photo_ids:
-                if len(photo_ids) == 1:
-                    logger.debug(f"Отправка одного фото для {data_type} ID {question_id}")
+                # Проверяем, что все file_id валидны (не пустые и являются строками)
+                valid_photo_ids = [pid for pid in photo_ids if isinstance(pid, str) and pid.strip()]
+                if not valid_photo_ids:
+                    logger.warning(f"Нет валидных file_id для {data_type} ID {question_id}: {photo_ids}")
+                    # Если нет валидных фотографий, отправляем только текст
+                    message = query.message.reply_text(response, reply_markup=reply_markup)
+                    message_ids.append(message.message_id)
+                elif len(valid_photo_ids) == 1:
+                    # Если одна фотография, отправляем через reply_photo
                     message = query.message.reply_photo(
-                        photo=photo_ids[0],
+                        photo=valid_photo_ids[0],
                         caption=response,
-                        reply_markup=reply_markup,
-                        parse_mode=None
+                        reply_markup=reply_markup
                     )
                     message_ids.append(message.message_id)
                 else:
-                    logger.debug(f"Отправка текстового сообщения и группы медиа с {len(photo_ids)} фото для {data_type} ID {question_id}")
-                    # Отправляем текстовое сообщение с ответом и кнопкой
-                    text_message = query.message.reply_text(
-                        response,
-                        reply_markup=reply_markup,
-                        parse_mode=None
-                    )
-                    message_ids.append(text_message.message_id)
-                    # Задержка для последовательности отправки
-                    asyncio.run(asyncio.sleep(0.1))
-                    # Отправляем группу медиа без caption
+                    # Если несколько фотографий, отправляем через reply_media_group
                     media = [
-                        InputMediaPhoto(
-                            media=photo_id,
-                            parse_mode=None
-                        ) for photo_id in photo_ids
+                        InputMediaPhoto(media=photo_id, caption=response if i == 0 else None)
+                        for i, photo_id in enumerate(valid_photo_ids)
                     ]
-                    messages = query.message.reply_media_group(media=media)
-                    message_ids.extend([msg.message_id for msg in messages])
-                    logger.debug(f"Отправлена группа медиа с сообщениями {[msg.message_id for msg in messages]}")
+                    try:
+                        messages = query.message.reply_media_group(media=media)
+                        message_ids.extend([msg.message_id for msg in messages])
+                        # Отправляем отдельное сообщение с кнопкой удаления
+                        delete_message = query.message.reply_text(
+                            "Нажмите, чтобы удалить ответ:",
+                            reply_markup=reply_markup
+                        )
+                        message_ids.append(delete_message.message_id)
+                    except Exception as e:
+                        logger.error(f"Ошибка при отправке reply_media_group для {data_type} ID {question_id}: {e}")
+                        # В случае ошибки отправляем только текст
+                        message = query.message.reply_text(response, reply_markup=reply_markup)
+                        message_ids.append(message.message_id)
             else:
-                logger.debug(f"Отправка текстового ответа для {data_type} ID {question_id}")
-                message = query.message.reply_text(
-                    response,
-                    reply_markup=reply_markup,
-                    parse_mode=None
-                )
+                # Если фотографий нет, отправляем только текст
+                message = query.message.reply_text(response, reply_markup=reply_markup)
                 message_ids.append(message.message_id)
             # Сохраняем message_ids для удаления
             context.user_data['answer_message_ids'] = message_ids
-            logger.info(f"Отправлены сообщения {message_ids} для пользователя {user_display}")
             # Планируем автоматическое удаление через 30 минут (1800 секунд)
             context.job_queue.run_once(
                 schedule_message_deletion,
@@ -483,11 +482,7 @@ def show_answer(update: Update, context: CallbackContext):
             )
             logger.info(f"Запланировано автоматическое удаление сообщений {message_ids} через 30 минут для пользователя {user_display}")
         else:
-            logger.warning(f"Вопрос/шаблон с ID {question_id} не найден для пользователя {user_display}")
-            query.message.reply_text(
-                f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!",
-                reply_markup=MAIN_MENU
-            )
+            query.message.reply_text(f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!", reply_markup=MAIN_MENU)
         context.user_data['conversation_state'] = f'SHOW_{data_type.upper()}_ANSWER'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
@@ -870,12 +865,6 @@ def receive_answer_photos(update: Update, context: CallbackContext):
             context.user_data['timeout_task'] = context.job_queue.run_once(
                 check_album_timeout, 2, context=(update, context)
             )
-        # Обновляем сообщение с просьбой отправить ещё фото или пропустить
-        update.message.reply_text(
-            "Фотография добавлена. Отправьте ещё фото или нажмите 'Пропустить'.",
-            reply_markup=ReplyKeyboardMarkup([["Пропустить"], ["/cancel"]], resize_keyboard=True),
-            quote=False
-        )
         return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     if not context.user_data.get('point_saved') and context.user_data.get('photos'):
         logger.info(f"Пользователь {update.effective_user.id} завершил альбом для {data_type} media group {context.user_data.get('media_group_id')} из-за нового сообщения")
@@ -899,16 +888,6 @@ def receive_answer_photos(update: Update, context: CallbackContext):
         context.user_data['conversation_state'] = f'{data_type.upper()}_PHOTOS_SAVED'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
-    # Если отправлено новое фото не в альбоме
-    if update.message.photo:
-        context.user_data['photos'].append(update.message.photo[-1].file_id)
-        logger.info(f"Пользователь {update.effective_user.id} добавил одно фото в {data_type}: {update.message.photo[-1].file_id}")
-        update.message.reply_text(
-            "Фотография добавлена. Отправьте ещё фото или нажмите 'Пропустить'.",
-            reply_markup=ReplyKeyboardMarkup([["Пропустить"], ["/cancel"]], resize_keyboard=True),
-            quote=False
-        )
-        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
 
 # Редактирование пункта справочника
@@ -1253,96 +1232,64 @@ def receive_edit_field(update: Update, context: CallbackContext):
 # Обработка значения для редактирования
 @restrict_access
 def receive_edit_value(update: Update, context: CallbackContext):
+    if not context.user_data.get('conversation_active', False):
+        logger.warning(f"Пользователь {update.effective_user.id} попытался отправить значение для редактирования в неактивном диалоге")
+        update.message.reply_text(
+            f"❌ Пожалуйста, начните редактирование {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'INVALID_EDIT_VALUE'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    data_type = context.user_data.get('data_type', 'guide')
     try:
-        user_id = update.effective_user.id
-        user_display = context.user_data.get('user_display', f"ID {user_id}")
-        data_type = context.user_data.get('data_type', 'guide')
-        question_id = context.user_data.get('edit_question_id')
-        field = context.user_data.get('edit_field')
-        logger.info(f"Пользователь {user_display} вошел в receive_edit_value с полем: {field}")
-
         data = load_data(data_type)
         key = 'questions' if data_type == 'guide' else 'templates'
-        item = next((q for q in data[key] if q["id"] == question_id), None)
-
-        if not item:
-            logger.warning(f"Вопрос/шаблон с ID {question_id} не найден для пользователя {user_display}")
-            update.message.reply_text(
-                f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!",
-                reply_markup=MAIN_MENU
-            )
-            context.user_data.clear()
-            return ConversationHandler.END
-
-        if field == f'edit_{data_type}_field_photo':
-            if update.message and update.message.photo:
-                # Инициализируем список edit_photos, если его нет
-                if 'edit_photos' not in context.user_data:
-                    context.user_data['edit_photos'] = item.get('photos', []) or []
-                # Добавляем новую фотографию
-                context.user_data['edit_photos'].append(update.message.photo[-1].file_id)
-                logger.info(f"Пользователь {user_display} добавил фото в {data_type} ID {question_id}: {update.message.photo[-1].file_id}")
-                update.message.reply_text(
-                    "Фотография добавлена. Отправьте ещё фото или нажмите 'Завершить', чтобы сохранить изменения.",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("Завершить", callback_data=f'complete_edit_{data_type}_photo')
-                    ]])
-                )
-                return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
-            elif update.callback_query and update.callback_query.data == f'complete_edit_{data_type}_photo':
-                # Завершаем редактирование фотографий
-                update.callback_query.answer()
-                if 'edit_photos' in context.user_data:
-                    item['photos'] = context.user_data['edit_photos']
-                    logger.info(f"Пользователь {user_display} обновил фото для {data_type} ID {question_id}: {item['photos']}")
-                else:
-                    item['photos'] = item.get('photos', [])
-                    logger.info(f"Пользователь {user_display} завершил редактирование без новых фото для {data_type} ID {question_id}")
-                save_data(data_type, data)
-                update.callback_query.message.reply_text(
-                    f"Фотографии для {'вопроса' if data_type == 'guide' else 'шаблона'} обновлены!",
-                    reply_markup=MAIN_MENU
-                )
-                context.user_data.clear()
-                context.user_data['conversation_state'] = f'{data_type.upper()}_PHOTOS_UPDATED'
-                context.user_data['conversation_active'] = False
-                return ConversationHandler.END
-            else:
-                update.message.reply_text(
-                    "Пожалуйста, отправьте фотографию или нажмите 'Завершить'.",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("Завершить", callback_data=f'complete_edit_{data_type}_photo')
-                    ]])
-                )
-                return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
-        else:
-            # Обработка текстовых полей (question, answer)
-            if update.message.text:
-                context.user_data['edit_value'] = update.message.text
-                item[field.replace(f'edit_{data_type}_field_', '')] = context.user_data['edit_value']
-                logger.info(f"Пользователь {user_display} обновил {field} для {data_type} ID {question_id}: {context.user_data['edit_value']}")
-                save_data(data_type, data)
-                update.message.reply_text(
-                    f"{'Вопрос' if field == f'edit_{data_type}_field_question' else 'Ответ'} обновлён!",
-                    reply_markup=MAIN_MENU
-                )
-                context.user_data.clear()
-                context.user_data['conversation_state'] = f'{data_type.upper()}_FIELD_UPDATED'
-                context.user_data['conversation_active'] = False
-                return ConversationHandler.END
-            else:
-                update.message.reply_text(
-                    f"Пожалуйста, введите {'вопрос' if field == f'edit_{data_type}_field_question' else 'ответ'}."
-                )
-                return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
+        question_id = context.user_data['edit_question_id']
+        field = context.user_data['edit_field']
+        for q in data[key]:
+            if q["id"] == question_id:
+                if field == f'edit_{data_type}_field_question':
+                    q['question'] = update.message.text
+                    logger.info(f"Пользователь {update.effective_user.id} обновил вопрос для {data_type} ID {question_id}: {q['question']}")
+                elif field == f'edit_{data_type}_field_answer':
+                    q['answer'] = update.message.text
+                    logger.info(f"Пользователь {update.effective_user.id} обновил ответ для {data_type} ID {question_id}: {q['answer']}")
+                elif field == f'edit_{data_type}_field_photo' and ENABLE_PHOTOS:
+                    if update.message.photo:
+                        q['photos'] = [update.message.photo[-1].file_id]
+                        logger.info(f"Пользователь {update.effective_user.id} обновил фото для {data_type} ID {question_id}: {q['photos']}")
+                        q.pop('photo', None)
+                    else:
+                        update.message.reply_text(
+                            f"❌ Пожалуйста, отправьте фото или альбом!\n(Напишите /cancel для отмены)",
+                            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                            quote=False
+                        )
+                        return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
+                break
+        save_data(data_type, data)
+        logger.info(f"Пользователь {update.effective_user.id} обновил {field} для {data_type} ID {question_id}")
+        context.user_data.clear()
+        context.user_data['conversation_state'] = f'EDIT_{data_type.upper()}_VALUE'
+        context.user_data['conversation_active'] = False
+        update.message.reply_text(
+            f"✏️ {'Вопрос' if field == f'edit_{data_type}_field_question' else 'Ответ' if field == f'edit_{data_type}_field_answer' else 'Фото'} обновлён!",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
+        return ConversationHandler.END
     except Exception as e:
-        logger.error(f"Ошибка в receive_edit_value для пользователя {user_display}: {e}", exc_info=True)
+        logger.error(f"Ошибка в receive_edit_value для пользователя {update.effective_user.id}: {e}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
         update.message.reply_text(
-            "❌ Ошибка при редактировании. Попробуйте снова.",
-            reply_markup=MAIN_MENU
+            "❌ Ошибка при обновлении значения. Попробуйте снова.",
+            reply_markup=MAIN_MENU,
+            quote=False
         )
         return ConversationHandler.END
 
@@ -1359,50 +1306,6 @@ def handle_invalid_input(update: Update, context: CallbackContext):
         reply_markup=MAIN_MENU,
         quote=False
     )
-    return ConversationHandler.END
-
-@restrict_access
-def skip_photo(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    user_display = context.user_data.get('user_display', f"ID {user_id}")
-    data_type = context.user_data.get('data_type', 'guide')
-    logger.info(f"Пользователь {user_display} пропустил добавление фото для {data_type}")
-
-    if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
-        logger.warning(f"Пользователь {user_display} попытался пропустить фото без активного диалога или вопроса")
-        update.message.reply_text(
-            f"❌ Пожалуйста, начните добавление {'пункта' if data_type == 'guide' else 'шаблона'} заново.",
-            reply_markup=MAIN_MENU,
-            quote=False
-        )
-        context.user_data.clear()
-        context.user_data['conversation_state'] = 'INVALID_PHOTOS'
-        context.user_data['conversation_active'] = False
-        return ConversationHandler.END
-
-    # Отменяем задачу таймаута, если она существует
-    if context.user_data.get('timeout_task'):
-        context.user_data['timeout_task'].cancel()
-        context.user_data['timeout_task'] = None
-        logger.info(f"Пользователь {user_display} отменил задачу таймаута в skip_photo")
-
-    # Удаляем сообщение о загрузке, если оно было отправлено
-    if context.user_data.get('loading_message_id'):
-        try:
-            context.bot.delete_message(
-                chat_id=update.effective_chat.id,
-                message_id=context.user_data['loading_message_id']
-            )
-            logger.info(f"Пользователь {user_display} удалил сообщение о загрузке")
-        except Exception as e:
-            logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
-
-    # Сохраняем пункт без новых фотографий
-    save_new_point(update, context, send_message=True)
-    logger.info(f"Пользователь {user_display} завершил add_{data_type}_conv в skip_photo")
-    context.user_data.clear()
-    context.user_data['conversation_state'] = f'{data_type.upper()}_PHOTO_SKIPPED'
-    context.user_data['conversation_active'] = False
     return ConversationHandler.END
 
 # Запуск бота
@@ -1488,10 +1391,10 @@ def main():
             ],
             GUIDE_EDIT_VALUE: [
                 MessageHandler(
-                    Filters.text & ~Filters.command | Filters.photo,
+                    Filters.text & ~Filters.command,
                     receive_edit_value
                 ),
-                CallbackQueryHandler(receive_edit_value, pattern='^complete_edit_(guide|template)_photo'),
+                MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
                 MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
             ],
         },
@@ -1514,50 +1417,14 @@ def main():
             ],
             TEMPLATE_EDIT_VALUE: [
                 MessageHandler(
-                    Filters.text & ~Filters.command | Filters.photo,
+                    Filters.text & ~Filters.command,
                     receive_edit_value
                 ),
-                CallbackQueryHandler(receive_edit_value, pattern='^complete_edit_(guide|template)_photo'),
+                MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
                 MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_user=True,
-        per_chat=True,
-        per_message=False,
-        allow_reentry=False,
-    )
-
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler('start', start),
-            MessageHandler(Filters.regex('^📖 Справочник$'), open_guide),
-            MessageHandler(Filters.regex('^📋 Шаблоны$'), open_templates),
-            MessageHandler(Filters.regex('^➕ Добавить пункт$'), add_point),
-            CallbackQueryHandler(select_edit_question, pattern='^edit_(guide|template)_question_'),
-            CallbackQueryHandler(receive_edit_field, pattern='^edit_(guide|template)_field_'),
-            CallbackQueryHandler(handle_edit_pagination, pattern='^edit_(guide|template)_page_'),
-        ],
-        states={
-            GUIDE_QUESTION: [MessageHandler(Filters.text & ~Filters.command, receive_question)],
-            GUIDE_ANSWER: [MessageHandler(Filters.text & ~Filters.command | Filters.photo, receive_answer)],
-            GUIDE_ANSWER_PHOTOS: [  # Заменено GUIDE_PHOTO на GUIDE_ANSWER_PHOTOS
-                MessageHandler(Filters.photo, receive_answer_photos) if ENABLE_PHOTOS else None,
-                MessageHandler(Filters.regex('^Пропустить$'), skip_photo),
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
-            ],
-            GUIDE_EDIT_FIELD: [CallbackQueryHandler(receive_edit_field, pattern='^edit_(guide|template)_field_')],
-            GUIDE_EDIT_VALUE: [
-                MessageHandler(Filters.text & ~Filters.command | Filters.photo, receive_edit_value),
-                CallbackQueryHandler(receive_edit_value, pattern='^complete_edit_(guide|template)_photo'),
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
-            ],
-        },
-        fallbacks=[
-            CommandHandler('cancel', cancel),
-            CallbackQueryHandler(cancel, pattern='^cancel$'),
-            CallbackQueryHandler(cancel, pattern='^cancel_(guide|template)$'),
-        ],
         per_user=True,
         per_chat=True,
         per_message=False,
@@ -1569,7 +1436,6 @@ def main():
     dp.add_handler(template_add_conv)
     dp.add_handler(guide_edit_conv)
     dp.add_handler(template_edit_conv)
-    dp.add_handler(conv_handler)  # Добавляем conv_handler
 
     # Регистрация основных команд
     dp.add_handler(CommandHandler("start", start))
@@ -1601,8 +1467,8 @@ def main():
 def clear_chat(context: CallbackContext, chat_id: int, message_id: int, user_display: str):
     try:
         logger.info(f"Пользователь {user_display} инициировал фоновую очистку чата {chat_id}")
-        # Ограничиваем количество удаляемых сообщений до 15
-        for i in range(message_id - 1, max(message_id - 15, 1), -1):
+        # Ограничиваем количество удаляемых сообщений до 10
+        for i in range(message_id - 1, max(message_id - 10, 1), -1):
             try:
                 context.bot.delete_message(chat_id=chat_id, message_id=i)
                 # Задержка 0.2 секунды для соблюдения лимитов Telegram API
