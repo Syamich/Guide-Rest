@@ -1467,16 +1467,18 @@ def main():
 def clear_chat(context: CallbackContext, chat_id: int, message_id: int, user_display: str):
     try:
         logger.info(f"Пользователь {user_display} инициировал фоновую очистку чата {chat_id}")
-        # Ограничиваем количество удаляемых сообщений до 10
-        for i in range(message_id - 1, max(message_id - 10, 1), -1):
+        # Ограничиваем количество удаляемых сообщений до 50
+        deleted_count = 0
+        for i in range(message_id - 1, max(message_id - 50, 1), -1):
             try:
                 context.bot.delete_message(chat_id=chat_id, message_id=i)
+                deleted_count += 1
                 # Задержка 0.2 секунды для соблюдения лимитов Telegram API
                 asyncio.run(asyncio.sleep(0.2))
             except Exception as e:
                 logger.debug(f"Не удалось удалить сообщение {i} в чате {chat_id}: {e}")
                 continue
-        logger.info(f"Чат {chat_id} очищен пользователем {user_display} в фоновом режиме")
+        logger.info(f"Чат {chat_id} очищен пользователем {user_display} в фоновом режиме, удалено {deleted_count} сообщений")
     except Exception as e:
         logger.error(f"Ошибка при фоновой очистке чата {chat_id} для пользователя {user_display}: {e}", exc_info=True)
 
