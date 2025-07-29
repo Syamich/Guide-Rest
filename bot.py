@@ -308,8 +308,8 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
                 reply_markup=inline_reply_markup,  # Инлайн-кнопки
                 reply_to_message_id=None
             )
-            # Отправляем пустое сообщение с главным меню
-            update.message.reply_text(".", reply_markup=MAIN_MENU)
+            # Отправляем сообщение с главным меню
+            update.message.reply_text("Выберите нужный пункт", reply_markup=MAIN_MENU)
         elif update.callback_query:
             update.callback_query.message.edit_text(
                 text,
@@ -383,8 +383,8 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
                 reply_markup=inline_reply_markup,  # Инлайн-кнопки
                 reply_to_message_id=None
             )
-            # Отправляем пустое сообщение с главным меню
-            update.message.reply_text(".", reply_markup=MAIN_MENU)
+            # Отправляем сообщение с главным меню
+            update.message.reply_text("Выберите нужный пункт", reply_markup=MAIN_MENU)
         elif update.callback_query:
             update.callback_query.message.edit_text(
                 text,
@@ -1443,8 +1443,8 @@ def main():
 def clear_chat(context: CallbackContext, chat_id: int, message_id: int, user_display: str):
     try:
         logger.info(f"Пользователь {user_display} инициировал фоновую очистку чата {chat_id}")
-        # Ограничиваем количество удаляемых сообщений до 5
-        for i in range(message_id - 1, max(message_id - 5, 1), -1):
+        # Ограничиваем количество удаляемых сообщений до 10
+        for i in range(message_id - 1, max(message_id - 10, 1), -1):
             try:
                 context.bot.delete_message(chat_id=chat_id, message_id=i)
                 # Задержка 0.2 секунды для соблюдения лимитов Telegram API
