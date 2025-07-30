@@ -429,7 +429,8 @@ def show_answer(update: Update, context: CallbackContext):
             # Создаём инлайн-кнопку для удаления
             delete_button = InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')
             reply_markup = InlineKeyboardMarkup([[delete_button]])
-            photo_ids = item.get('photos', [])  # Получаем список фотографий
+            # Получаем список фотографий, учитывая как photos, так и устаревшее photo
+            photo_ids = item.get('photos', []) or ([item['photo']] if item.get('photo') else [])
             message_ids = []
             chat_id = query.message.chat_id
             if ENABLE_PHOTOS and photo_ids:
