@@ -107,6 +107,23 @@
       "id": 22,
       "question": "Возврат ошибочного платежа",
       "answer": "1. Переходим во вкладку \"тарифы для поставщиков\" или \"Тарифы\", если участник находится на главной странице\n2. В самом низу страницы будут образцы заявлений \n3. Выбираем нужный \"Образец заявления возврат ошибочного платежа\""
+    },
+    {
+      "id": 23,
+      "question": "Регистрация участников",
+      "answer": null,
+      "photos": [
+        "AgACAgIAAxkBAAIN2WiKBU4f_TlvLF7zft7V2ZDPh7eMAAJi-DEbcPxRSOM1w_XQ15QJAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN2miKBU5a8uZFG_W58RUIwqfKZcu6AAJj-DEbcPxRSA0ikRw017hSAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN22iKBU7x3nIGWfQRBTWe_phb9DjSAAJk-DEbcPxRSDVoO9LGz4tgAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN3GiKBU75yztWBjMhTTC4YeDpgHopAAJn-DEbcPxRSBhpfgMfQ88vAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN3WiKBU5-qIqMUvTDWgmlOrg1YaY6AAJp-DEbcPxRSO_RXCIZTCE3AQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN3miKBU5JdYhCLEZ3FNcbC93gkQqvAAJl-DEbcPxRSNOZooGWTR-gAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN32iKBU6t_SutfH6vjNqTyqMlTa0LAAJm-DEbcPxRSOY5XoAqlUH-AQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN4GiKBU61r1-vnh8nAp5pX1aOgtPXAAJq-DEbcPxRSLxg9azT4LatAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN4WiKBU7e_n0QchUpupmjiOCBG97jAAJo-DEbcPxRSKTgSXFFmUPuAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIN4miKBU4jghcYl2XSJjYfHUKmdfHjAAJr-DEbcPxRSPeZ6SLrr6kzAQADAgADeQADNgQ"
+      ]
     }
   ]
 }
