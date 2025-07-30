@@ -549,7 +549,8 @@ def handle_template_action(update: Update, context: CallbackContext):
 @restrict_access
 def perform_search(update: Update, context: CallbackContext):
     if context.user_data.get('conversation_active', False):
-        logger.info(f"Пользователь {update.effective_user.id} находится в активном диалоге ({context.user_data.get('conversation_state')}), пропускаем perform_search")
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.info(f"Пользователь {user_display} находится в активном диалоге ({context.user_data.get('conversation_state')}), пропускаем perform_search")
         return
     try:
         logger.info(f"Пользователь {update.effective_user.id} вошел в perform_search с текстом: '{update.message.text}'")
@@ -561,7 +562,8 @@ def perform_search(update: Update, context: CallbackContext):
             )
             return
         keyword = update.message.text.lower().strip()
-        logger.info(f"Пользователь {update.effective_user.id} выполнил поиск по ключевому слову '{keyword}'")
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.info(f"Пользователь {user_display} выполнил поиск по ключевому слову '{keyword}'")
         guide = load_guide()
         if not isinstance(guide, dict) or "questions" not in guide or not isinstance(guide["questions"], list):
             logger.error("Неверная структура guide.json")
@@ -574,8 +576,7 @@ def perform_search(update: Update, context: CallbackContext):
             q for q in guide["questions"]
             if isinstance(q, dict) and
             "question" in q and isinstance(q["question"], str) and
-            "answer" in q and isinstance(q["answer"], str) and
-            (keyword in q["question"].lower() or keyword in q["answer"].lower())
+            (keyword in q["question"].lower() or (q.get("answer") and isinstance(q["answer"], str) and keyword in q["answer"].lower()))
         ]
         if not results:
             logger.info(f"Результаты для ключевого слова '{keyword}' не найдены")
@@ -589,10 +590,12 @@ def perform_search(update: Update, context: CallbackContext):
         context.user_data['data_type'] = 'guide'
         context.user_data['conversation_state'] = 'SEARCH'
         context.user_data['conversation_active'] = False
+        logger.debug(f"Найдено {len(results)} пунктов для запроса '{keyword}': {[item['id'] for item in results]}")
         display_guide_page(update, context, {"questions": results}, 0, 'guide')
         return
     except Exception as e:
-        logger.error(f"Ошибка в perform_search для пользователя {update.effective_user.id}: {str(e)}", exc_info=True)
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.error(f"Ошибка в perform_search для пользователя {user_display}: {str(e)}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
