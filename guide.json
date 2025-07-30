@@ -129,6 +129,21 @@
       "id": 24,
       "question": "Как внести изменения в закупку?",
       "answer": "Чтобы внести изменения в закупку нужно:\n1. Сформировать новое извещение о закупке\n2. Изменить всё, что надо было (обычно это сроки проведения закупки или же просто нужно прикрепить новую документацию)\n3. Разместить и отправить в ЕИС\n4. Зайти в ЕИС\n5. Зайти в \"Извещения о закупках\"\n6. Найти эту закупку, нажать на треугольник, нажать на кнопку \"Просмотреть\"\n7. В изменениях разместить новую версию извещения.\n\nВАЖНЫЙ МОМЕНТ!\nЕсли изменения вносятся, когда с момента размещения закупки уже прошла половина срока, то заказчик обязан продлить закупку ещё на половину срока (округляем в большую сторону)\nНапример: Заказчик разместил закупку аукцион (как мы знаем аукцион размещает не менее, чем на 15 календарных дней), он захотел внести изменения в эту закупку на 8-ой день, в этом случае он обязан продлить закупку ещё на половину срока, то есть на 8 дней."
+    },
+    {
+      "id": 25,
+      "question": "Инструкция по аккредитации участников",
+      "answer": null,
+      "photos": [
+        "AgACAgIAAxkBAAIOT2iKDfiTmkpygz3u3XwOaihz-2-rAALj-DEbcPxRSFmzN_ze9JQaAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIOUGiKDfiFh2PDbbyuFm88RSbSi81aAALk-DEbcPxRSNcxh0x6-JDyAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIOUWiKDfjweWb2yC6vojSLC8KU6edJAALl-DEbcPxRSEZYWHpu67wcAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIOUmiKDfiu4xGtjIWRpgdKCGy4S8zbAALm-DEbcPxRSDnIoMGRxpghAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIOU2iKDfjxwN_095UuPTM5RKkb45ecAALn-DEbcPxRSHT8PKzQQIx_AQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIOVGiKDfihAXnkPKb-NpTWXige5mQ2AALp-DEbcPxRSDcpCsCNCHuVAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIOVWiKDfgcq9XcH-mEriRi1BTMp_KMAALo-DEbcPxRSCf3BG-08rAXAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAIOVmiKDfgaMl84wkJlM5Eh_k2YkUTSAALq-DEbcPxRSAQAAcrA9irpVAEAAwIAA3kAAzYE"
+      ]
     }
   ]
 }
