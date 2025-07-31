@@ -432,7 +432,10 @@ def show_answer(update: Update, context: CallbackContext):
             )
             return
         logger.info(f"Пользователь {user_display} запросил ответ для {data_type} ID {question_id}")
-        text = f"📄 Вопрос: {item['question']}\nОтвет: {item.get('answer', '')}"
+        # Формируем текст, включая вопрос и ответ (если есть)
+        question_text = item.get('question', 'Вопрос отсутствует')
+        answer_text = item.get('answer', 'Ответ отсутствует')
+        text = f"📄 Вопрос: {question_text}\nОтвет: {answer_text}"
         photo_ids = item.get('photos', [])
         doc_ids = item.get('documents', [])
         message_ids = []
@@ -467,10 +470,11 @@ def show_answer(update: Update, context: CallbackContext):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{query.message.message_id}')]])
             )
             message_ids.append(message.message_id)
+        # Планируем автоматическое удаление
         context.job_queue.run_once(
-            lambda context: delete_messages(context, message_ids, user_display),
+            schedule_message_deletion,
             1800,
-            data={'message_ids': message_ids, 'chat_id': query.message.chat_id}
+            context={'message_ids': message_ids, 'chat_id': query.message.chat_id, 'user_display': user_display}
         )
         logger.info(f"Запланировано автоматическое удаление сообщений {message_ids} через 30 минут для пользователя {user_display}")
     except Exception as e:
@@ -755,31 +759,67 @@ def receive_answer(update: Update, context: CallbackContext):
         return ConversationHandler.END
     if 'photos' not in context.user_data:
         context.user_data['photos'] = []
-    context.user_data['answer'] = update.message.caption if update.message.photo else update.message.text if update.message.text else ""
+    if 'documents' not in context.user_data:
+        context.user_data['documents'] = []
+    context.user_data['answer'] = update.message.caption if update.message.photo or update.message.document else update.message.text if update.message.text else ""
     context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
-    if ENABLE_PHOTOS and update.message.photo:
-        if update.message.media_group_id:
-            context.user_data['media_group_id'] = update.message.media_group_id
-            context.user_data['photos'].append(update.message.photo[-1].file_id)
-            context.user_data['last_photo_time'] = update.message.date
-            logger.info(f"Пользователь {update.effective_user.id} добавил фото в альбом {data_type} media group {update.message.media_group_id}: {update.message.photo[-1].file_id}")
-            if len(context.user_data['photos']) == 1:
-                loading_message = update.message.reply_text("⏳ Загрузка...", quote=False)
-                context.user_data['loading_message_id'] = loading_message.message_id
-                if not context.user_data.get('timeout_task'):
-                    context.user_data['timeout_task'] = context.job_queue.run_once(
-                        check_album_timeout, 2, context=(update, context)
-                    )
-            return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-        else:
-            context.user_data['photos'] = [update.message.photo[-1].file_id]
-            logger.info(f"Пользователь {update.effective_user.id} добавил одно фото в {data_type}: {context.user_data['photos']}")
-    save_new_point(update, context, send_message=True)
-    logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в receive_answer")
-    context.user_data.clear()
-    context.user_data['conversation_state'] = f'{data_type.upper()}_POINT_SAVED'
-    context.user_data['conversation_active'] = False
-    return ConversationHandler.END
+    if ENABLE_PHOTOS and (update.message.photo or update.message.document):
+        if update.message.photo:
+            if update.message.media_group_id:
+                context.user_data['media_group_id'] = update.message.media_group_id
+                context.user_data['photos'].append(update.message.photo[-1].file_id)
+                context.user_data['last_photo_time'] = update.message.date
+                logger.info(f"Пользователь {update.effective_user.id} добавил фото в альбом {data_type} media group {update.message.media_group_id}: {update.message.photo[-1].file_id}")
+                if len(context.user_data['photos']) == 1:
+                    loading_message = update.message.reply_text("⏳ Загрузка...", quote=False)
+                    context.user_data['loading_message_id'] = loading_message.message_id
+                    if not context.user_data.get('timeout_task'):
+                        context.user_data['timeout_task'] = context.job_queue.run_once(
+                            check_album_timeout, 2, context=(update, context)
+                        )
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            else:
+                context.user_data['photos'] = [update.message.photo[-1].file_id]
+                logger.info(f"Пользователь {update.effective_user.id} добавил одно фото в {data_type}: {context.user_data['photos']}")
+        elif update.message.document:
+            doc = update.message.document
+            if doc.mime_type not in [
+                'application/msword',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/pdf',
+                'application/vnd.ms-excel',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            ]:
+                update.message.reply_text(
+                    "❌ Поддерживаются только файлы .doc, .docx, .pdf, .xls, .xlsx!",
+                    reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            if doc.file_size > 20 * 1024 * 1024:
+                update.message.reply_text(
+                    "❌ Файл слишком большой! Максимальный размер — 20 МБ.",
+                    reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            context.user_data['documents'].append(doc.file_id)
+            logger.info(f"Пользователь {update.effective_user.id} добавил документ в {data_type}: {doc.file_id}")
+    # Сохраняем пункт, если есть файлы или текст
+    if context.user_data.get('photos') or context.user_data.get('documents') or context.user_data.get('answer'):
+        save_new_point(update, context, send_message=True)
+        logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в receive_answer")
+        context.user_data.clear()
+        context.user_data['conversation_state'] = f'{data_type.upper()}_POINT_SAVED'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    # Запрашиваем файлы или текст, если ничего не отправлено
+    update.message.reply_text(
+        "📎 Отправьте фото, документ (.doc, .docx, .pdf, .xls, .xlsx) или текст ответа (или /cancel для отмены):",
+        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+        quote=False
+    )
+    return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
 
 # Проверка таймаута альбома
 def check_album_timeout(context: CallbackContext):
@@ -853,20 +893,16 @@ def receive_answer_files(update: Update, context: CallbackContext):
         if len(context.user_data['photos']) + len(context.user_data['documents']) >= 10:
             update.message.reply_text(
                 "❌ Максимум 10 файлов (фото или документы) на пункт! Сохраняем текущие файлы.",
-                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                 quote=False
             )
-            save_new_point(update, context, send_message=True)
-            context.user_data.clear()
-            context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
-            context.user_data['conversation_active'] = False
-            return ConversationHandler.END
+            return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         if update.message.photo:
             new_photos = [photo.file_id for photo in update.message.photo]
             context.user_data['photos'].extend(new_photos)
             update.message.reply_text(
-                f"✅ Фото ({len(context.user_data['photos'])}) добавлены. Отправьте ещё фото, документы (.doc, .docx, .pdf, .xls, .xlsx) или подпись (если нужно), либо /cancel для отмены.",
-                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                f"✅ Фото ({len(context.user_data['photos'])}) добавлены. Отправьте ещё файлы, текст или нажмите 'Готово':",
+                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                 quote=False
             )
             logger.info(f"Пользователь {user_display} добавил {len(new_photos)} фото, всего: {len(context.user_data['photos'])}")
@@ -881,31 +917,44 @@ def receive_answer_files(update: Update, context: CallbackContext):
             ]:
                 update.message.reply_text(
                     "❌ Поддерживаются только файлы .doc, .docx, .pdf, .xls, .xlsx!",
-                    reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                     quote=False
                 )
-                return GUIDE_PHOTOS if data_type == 'guide' else ConversationHandler.END
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
             if doc.file_size > 20 * 1024 * 1024:  # 20 MB limit
                 update.message.reply_text(
                     "❌ Файл слишком большой! Максимальный размер — 20 МБ.",
-                    reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                     quote=False
                 )
-                return GUIDE_PHOTOS if data_type == 'guide' else ConversationHandler.END
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
             context.user_data['documents'].append(doc.file_id)
             update.message.reply_text(
-                f"✅ Документ добавлен ({len(context.user_data['documents'])}). Отправьте ещё файлы или подпись, либо /cancel для отмены.",
-                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                f"✅ Документ добавлен ({len(context.user_data['documents'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                 quote=False
             )
             logger.info(f"Пользователь {user_display} добавил документ {os.path.splitext(doc.file_name)[1].lower()}, всего: {len(context.user_data['documents'])}")
+        elif update.message.text == "Готово":
+            if not (context.user_data.get('photos') or context.user_data.get('documents') or context.user_data.get('answer')):
+                update.message.reply_text(
+                    "❌ Отправьте хотя бы один файл или текст перед завершением!",
+                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            save_new_point(update, context, send_message=True)
+            context.user_data.clear()
+            context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
+            context.user_data['conversation_active'] = False
+            return ConversationHandler.END
         else:
             update.message.reply_text(
                 "❌ Пожалуйста, отправьте фото или документ (.doc, .docx, .pdf, .xls, .xlsx)!",
-                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                 quote=False
             )
-        return GUIDE_PHOTOS if data_type == 'guide' else ConversationHandler.END
+        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     except Exception as e:
         logger.error(f"Ошибка в receive_answer_files для пользователя {user_display}: {str(e)}", exc_info=True)
         context.user_data.clear()
@@ -1393,8 +1442,8 @@ def main():
                 MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
             GUIDE_ANSWER_PHOTOS: [
-                MessageHandler(Filters.photo | Filters.document, receive_answer_files) if ENABLE_PHOTOS else None,
-                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(Filters.photo | Filters.document | Filters.regex(r'^Готово$'), receive_answer_files) if ENABLE_PHOTOS else None,
+                MessageHandler(Filters.text & ~Filters.command & ~Filters.regex(r'^Готово$'), receive_answer),
                 MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
         },
@@ -1418,8 +1467,8 @@ def main():
                 MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
             TEMPLATE_ANSWER_PHOTOS: [
-                MessageHandler(Filters.photo | Filters.document, receive_answer_files) if ENABLE_PHOTOS else None,
-                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(Filters.photo | Filters.document | Filters.regex(r'^Готово$'), receive_answer_files) if ENABLE_PHOTOS else None,
+                MessageHandler(Filters.text & ~Filters.command & ~Filters.regex(r'^Готово$'), receive_answer),
                 MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
         },
