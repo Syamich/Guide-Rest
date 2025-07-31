@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import logging
+import pymorphy3
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
@@ -416,84 +417,69 @@ def show_answer(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     try:
-        data_type, _, question_id = query.data.split('_')
+        data_type, _, question_id = query.data.split('_', 2)
         question_id = int(question_id)
-        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-        logger.info(f"Пользователь {user_display} запросил ответ для {data_type} ID {question_id}")
         data = load_data(data_type)
         key = 'questions' if data_type == 'guide' else 'templates'
         item = next((q for q in data[key] if q["id"] == question_id), None)
-        if item:
-            # Форматируем ответ с новой строкой после "Ответ:"
-            response = f"📄 Вопрос: {item['question']}\nОтвет:\n{item['answer']}"
-            # Создаём инлайн-кнопку для удаления
-            delete_button = InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')
-            reply_markup = InlineKeyboardMarkup([[delete_button]])
-            # Получаем список фотографий, учитывая как photos, так и устаревшее photo
-            photo_ids = item.get('photos', []) or ([item['photo']] if item.get('photo') else [])
-            message_ids = []
-            chat_id = query.message.chat_id
-            if ENABLE_PHOTOS and photo_ids:
-                # Проверяем, что все file_id валидны (не пустые и являются строками)
-                valid_photo_ids = [pid for pid in photo_ids if isinstance(pid, str) and pid.strip()]
-                if not valid_photo_ids:
-                    logger.warning(f"Нет валидных file_id для {data_type} ID {question_id}: {photo_ids}")
-                    # Если нет валидных фотографий, отправляем только текст
-                    message = query.message.reply_text(response, reply_markup=reply_markup)
-                    message_ids.append(message.message_id)
-                elif len(valid_photo_ids) == 1:
-                    # Если одна фотография, отправляем через reply_photo
-                    message = query.message.reply_photo(
-                        photo=valid_photo_ids[0],
-                        caption=response,
-                        reply_markup=reply_markup
-                    )
-                    message_ids.append(message.message_id)
-                else:
-                    # Если несколько фотографий, отправляем через reply_media_group
-                    media = [
-                        InputMediaPhoto(media=photo_id, caption=response if i == 0 else None)
-                        for i, photo_id in enumerate(valid_photo_ids)
-                    ]
-                    try:
-                        messages = query.message.reply_media_group(media=media)
-                        message_ids.extend([msg.message_id for msg in messages])
-                        # Отправляем отдельное сообщение с кнопкой удаления
-                        delete_message = query.message.reply_text(
-                            "Нажмите, чтобы удалить ответ:",
-                            reply_markup=reply_markup
-                        )
-                        message_ids.append(delete_message.message_id)
-                    except Exception as e:
-                        logger.error(f"Ошибка при отправке reply_media_group для {data_type} ID {question_id}: {e}")
-                        # В случае ошибки отправляем только текст
-                        message = query.message.reply_text(response, reply_markup=reply_markup)
-                        message_ids.append(message.message_id)
-            else:
-                # Если фотографий нет, отправляем только текст
-                message = query.message.reply_text(response, reply_markup=reply_markup)
-                message_ids.append(message.message_id)
-            # Сохраняем message_ids для удаления
-            context.user_data['answer_message_ids'] = message_ids
-            # Планируем автоматическое удаление через 30 минут (1800 секунд)
-            context.job_queue.run_once(
-                schedule_message_deletion,
-                1800,
-                context={'chat_id': chat_id, 'message_ids': message_ids, 'user_display': user_display}
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        if not item:
+            logger.error(f"Пункт {data_type} с ID {question_id} не найден для пользователя {user_display}")
+            query.message.reply_text(
+                "❌ Пункт не найден!",
+                reply_markup=MAIN_MENU,
+                quote=False
             )
-            logger.info(f"Запланировано автоматическое удаление сообщений {message_ids} через 30 минут для пользователя {user_display}")
+            return
+        logger.info(f"Пользователь {user_display} запросил ответ для {data_type} ID {question_id}")
+        text = f"📄 Вопрос: {item['question']}\nОтвет: {item.get('answer', '')}"
+        photo_ids = item.get('photos', [])
+        doc_ids = item.get('documents', [])
+        message_ids = []
+        if photo_ids:
+            if len(photo_ids) == 1:
+                message = query.message.reply_photo(
+                    photo=photo_ids[0],
+                    caption=text,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{query.message.message_id}')]])
+                )
+                message_ids.append(message.message_id)
+            else:
+                media = [InputMediaPhoto(media=pid, caption=text if i == 0 else None) for i, pid in enumerate(photo_ids)]
+                messages = query.message.reply_media_group(media=media)
+                message_ids.extend([msg.message_id for msg in messages])
+                delete_message = query.message.reply_text(
+                    "🗑 Удалить",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{",".join(map(str, message_ids))}')]])
+                )
+                message_ids.append(delete_message.message_id)
+        elif doc_ids:
+            for i, doc_id in enumerate(doc_ids):
+                message = query.message.reply_document(
+                    document=doc_id,
+                    caption=text if i == 0 else None,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{query.message.message_id}')]])
+                )
+                message_ids.append(message.message_id)
         else:
-            query.message.reply_text(f"❌ {'Вопрос' if data_type == 'guide' else 'Шаблон'} не найден!", reply_markup=MAIN_MENU)
-        context.user_data['conversation_state'] = f'SHOW_{data_type.upper()}_ANSWER'
-        context.user_data['conversation_active'] = False
-        return ConversationHandler.END
-    except Exception as e:
-        logger.error(f"Ошибка в show_answer для пользователя {user_display}: {e}", exc_info=True)
-        query.message.reply_text(
-            "❌ Ошибка при отображении ответа. Попробуйте снова.",
-            reply_markup=MAIN_MENU
+            message = query.message.reply_text(
+                text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{query.message.message_id}')]])
+            )
+            message_ids.append(message.message_id)
+        context.job_queue.run_once(
+            lambda context: delete_messages(context, message_ids, user_display),
+            1800,
+            data={'message_ids': message_ids, 'chat_id': query.message.chat_id}
         )
-        return ConversationHandler.END
+        logger.info(f"Запланировано автоматическое удаление сообщений {message_ids} через 30 минут для пользователя {user_display}")
+    except Exception as e:
+        logger.error(f"Ошибка в show_answer для пользователя {user_display}: {str(e)}", exc_info=True)
+        query.message.reply_text(
+            "❌ Произошла ошибка при отображении ответа. Попробуйте снова.",
+            reply_markup=MAIN_MENU,
+            quote=False
+        )
 
 # Обработка пагинации
 @restrict_access
@@ -572,12 +558,26 @@ def perform_search(update: Update, context: CallbackContext):
                 reply_markup=MAIN_MENU
             )
             return
-        results = [
-            q for q in guide["questions"]
-            if isinstance(q, dict) and
-            "question" in q and isinstance(q["question"], str) and
-            (keyword in q["question"].lower() or (q.get("answer") and isinstance(q["answer"], str) and keyword in q["answer"].lower()))
-        ]
+        # Инициализация морфологического анализатора
+        morph = pymorphy3.MorphAnalyzer()
+        # Нормализация ключевого слова
+        keyword_normalized = morph.parse(keyword)[0].normal_form
+        logger.debug(f"Нормализованное ключевое слово: '{keyword_normalized}'")
+        results = []
+        for q in guide["questions"]:
+            if not (isinstance(q, dict) and "question" in q and isinstance(q["question"], str)):
+                continue
+            # Нормализация слов в вопросе
+            question_words = [morph.parse(word)[0].normal_form for word in q["question"].lower().split()]
+            # Нормализация слов в ответе, если он существует
+            answer_words = (
+                [morph.parse(word)[0].normal_form for word in q["answer"].lower().split()]
+                if q.get("answer") and isinstance(q["answer"], str)
+                else []
+            )
+            # Проверка наличия нормализованного ключевого слова
+            if keyword_normalized in question_words or keyword_normalized in answer_words:
+                results.append(q)
         if not results:
             logger.info(f"Результаты для ключевого слова '{keyword}' не найдены")
             update.message.reply_text(
@@ -590,6 +590,7 @@ def perform_search(update: Update, context: CallbackContext):
         context.user_data['data_type'] = 'guide'
         context.user_data['conversation_state'] = 'SEARCH'
         context.user_data['conversation_active'] = False
+        context.user_data['search_query'] = keyword  # Сохраняем оригинальный запрос
         logger.debug(f"Найдено {len(results)} пунктов для запроса '{keyword}': {[item['id'] for item in results]}")
         display_guide_page(update, context, {"questions": results}, 0, 'guide')
         return
@@ -806,93 +807,116 @@ def check_album_timeout(context: CallbackContext):
     return None
 
 # Сохранение нового пункта
-def save_new_point(update: Update, context: CallbackContext, send_message: bool = False):
-    if context.user_data.get('point_saved'):
-        logger.info(f"Пользователь {update.effective_user.id} пропустил сохранение пункта, так как он уже сохранен")
-        return
-    data_type = context.user_data.get('data_type', 'guide')
-    data = load_data(data_type)
-    key = 'questions' if data_type == 'guide' else 'templates'
-    new_id = max([q["id"] for q in data[key]], default=0) + 1
-    new_point = {
-        "id": new_id,
-        "question": context.user_data['new_question'],
-        "answer": context.user_data['answer']
-    }
-    if ENABLE_PHOTOS and context.user_data.get('photos'):
-        new_point['photos'] = context.user_data['photos']
-        logger.info(f"Пользователь {update.effective_user.id} добавил фото в {data_type}: {new_point['photos']}")
-    data[key].append(new_point)
-    save_data(data_type, data)
-    logger.info(f"Пользователь {update.effective_user.id} добавил новый пункт {data_type}: {new_point['question']}")
-    if send_message:
+@restrict_access
+def save_new_point(update: Update, context: CallbackContext, send_message=True):
+    try:
+        data_type = context.user_data.get('data_type', 'guide')
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        data = load_data(data_type)
+        key = 'questions' if data_type == 'guide' else 'templates'
+        new_id = max([q["id"] for q in data[key]], default=0) + 1
+        new_point = {
+            "id": new_id,
+            "question": context.user_data.get('question', ''),
+            "answer": context.user_data.get('answer', ''),
+            "photos": context.user_data.get('photos', []),
+            "documents": context.user_data.get('documents', [])
+        }
+        data[key].append(new_point)
+        save_data(data_type, data)
+        if send_message:
+            update.message.reply_text(
+                f"✅ Пункт успешно добавлен с ID {new_id}!",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+        logger.info(f"Пользователь {user_display} сохранил новый пункт в {data_type} с ID {new_id}")
+    except Exception as e:
+        logger.error(f"Ошибка в save_new_point для пользователя {user_display}: {str(e)}", exc_info=True)
         update.message.reply_text(
-            f"➕ {'Пункт' if data_type == 'guide' else 'Шаблон'} добавлен!\nВопрос: {new_point['question']}",
+            "❌ Произошла ошибка при сохранении пункта. Попробуйте снова.",
             reply_markup=MAIN_MENU,
             quote=False
         )
-    context.user_data['point_saved'] = True
 
 # Обработка фотографий для ответа
 @restrict_access
-def receive_answer_photos(update: Update, context: CallbackContext):
-    if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
-        logger.warning(f"Пользователь {update.effective_user.id} попытался отправить фото без активного диалога или вопроса")
-        update.message.reply_text(
-            f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
-            reply_markup=MAIN_MENU,
-            quote=False
-        )
-        context.user_data.clear()
-        context.user_data['conversation_state'] = 'INVALID_PHOTOS'
-        context.user_data['conversation_active'] = False
-        return ConversationHandler.END
+def receive_answer_files(update: Update, context: CallbackContext):
     data_type = context.user_data.get('data_type', 'guide')
-    if data_type not in ['guide', 'template']:
-        logger.error(f"Недопустимый data_type: {data_type}")
+    try:
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.info(f"Пользователь {user_display} отправил файл/альбом для {data_type}")
+        if 'photos' not in context.user_data:
+            context.user_data['photos'] = []
+        if 'documents' not in context.user_data:
+            context.user_data['documents'] = []
+        if len(context.user_data['photos']) + len(context.user_data['documents']) >= 10:
+            update.message.reply_text(
+                "❌ Максимум 10 файлов (фото или документы) на пункт! Сохраняем текущие файлы.",
+                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                quote=False
+            )
+            save_new_point(update, context, send_message=True)
+            context.user_data.clear()
+            context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
+            context.user_data['conversation_active'] = False
+            return ConversationHandler.END
+        if update.message.photo:
+            new_photos = [photo.file_id for photo in update.message.photo]
+            context.user_data['photos'].extend(new_photos)
+            update.message.reply_text(
+                f"✅ Фото ({len(context.user_data['photos'])}) добавлены. Отправьте ещё фото, документы (.doc, .docx, .pdf, .xls, .xlsx) или подпись (если нужно), либо /cancel для отмены.",
+                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                quote=False
+            )
+            logger.info(f"Пользователь {user_display} добавил {len(new_photos)} фото, всего: {len(context.user_data['photos'])}")
+        elif update.message.document:
+            doc = update.message.document
+            if doc.mime_type not in [
+                'application/msword',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/pdf',
+                'application/vnd.ms-excel',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            ]:
+                update.message.reply_text(
+                    "❌ Поддерживаются только файлы .doc, .docx, .pdf, .xls, .xlsx!",
+                    reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
+                return GUIDE_PHOTOS if data_type == 'guide' else ConversationHandler.END
+            if doc.file_size > 20 * 1024 * 1024:  # 20 MB limit
+                update.message.reply_text(
+                    "❌ Файл слишком большой! Максимальный размер — 20 МБ.",
+                    reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
+                return GUIDE_PHOTOS if data_type == 'guide' else ConversationHandler.END
+            context.user_data['documents'].append(doc.file_id)
+            update.message.reply_text(
+                f"✅ Документ добавлен ({len(context.user_data['documents'])}). Отправьте ещё файлы или подпись, либо /cancel для отмены.",
+                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                quote=False
+            )
+            logger.info(f"Пользователь {user_display} добавил документ {os.path.splitext(doc.file_name)[1].lower()}, всего: {len(context.user_data['documents'])}")
+        else:
+            update.message.reply_text(
+                "❌ Пожалуйста, отправьте фото или документ (.doc, .docx, .pdf, .xls, .xlsx)!",
+                reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                quote=False
+            )
+        return GUIDE_PHOTOS if data_type == 'guide' else ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Ошибка в receive_answer_files для пользователя {user_display}: {str(e)}", exc_info=True)
+        context.user_data.clear()
+        context.user_data['conversation_state'] = 'ERROR'
+        context.user_data['conversation_active'] = False
         update.message.reply_text(
-            "❌ Ошибка: Неверный тип данных. Начните заново.",
+            "❌ Произошла ошибка при загрузке файла. Попробуйте снова.",
             reply_markup=MAIN_MENU,
             quote=False
         )
-        context.user_data.clear()
-        context.user_data['conversation_state'] = 'INVALID_DATA_TYPE'
-        context.user_data['conversation_active'] = False
         return ConversationHandler.END
-    if 'photos' not in context.user_data:
-        context.user_data['photos'] = []
-    if update.message.media_group_id == context.user_data.get('media_group_id'):
-        context.user_data['photos'].append(update.message.photo[-1].file_id)
-        context.user_data['last_photo_time'] = update.message.date
-        logger.info(f"Пользователь {update.effective_user.id} добавил фото в альбом {data_type}: {update.message.photo[-1].file_id}")
-        if not context.user_data.get('timeout_task'):
-            context.user_data['timeout_task'] = context.job_queue.run_once(
-                check_album_timeout, 2, context=(update, context)
-            )
-        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-    if not context.user_data.get('point_saved') and context.user_data.get('photos'):
-        logger.info(f"Пользователь {update.effective_user.id} завершил альбом для {data_type} media group {context.user_data.get('media_group_id')} из-за нового сообщения")
-        if context.user_data.get('timeout_task'):
-            context.user_data['timeout_task'].cancel()
-            context.user_data['timeout_task'] = None
-            logger.info(f"Пользователь {update.effective_user.id} отменил задачу таймаута в receive_answer_photos")
-        if context.user_data.get('loading_message_id'):
-            try:
-                context.bot.delete_message(
-                    chat_id=update.effective_chat.id,
-                    message_id=context.user_data['loading_message_id']
-                )
-                logger.info(f"Пользователь {update.effective_user.id} удалил сообщение о загрузке")
-            except Exception as e:
-                logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
-        save_new_point(update, context, send_message=True)
-        context.user_data['point_saved'] = True
-        logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в receive_answer_photos")
-        context.user_data.clear()
-        context.user_data['conversation_state'] = f'{data_type.upper()}_PHOTOS_SAVED'
-        context.user_data['conversation_active'] = False
-        return ConversationHandler.END
-    return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
 
 # Редактирование пункта справочника
 @restrict_access
@@ -1212,8 +1236,30 @@ def receive_edit_field(update: Update, context: CallbackContext):
             )
             logger.info(f"Пользователь {update.effective_user.id} удалил {data_type} ID {question_id}")
             return ConversationHandler.END
+        # Определяем поле и получаем текущее значение
         field = "вопрос" if query.data == f'edit_{data_type}_field_question' else "ответ" if query.data == f'edit_{data_type}_field_answer' else "фото/альбом"
-        prompt = f"✏️ Введите новый {field}:\n(Напишите /cancel для отмены)"
+        data = load_data(data_type)
+        key = 'questions' if data_type == 'guide' else 'templates'
+        question_id = context.user_data['edit_question_id']
+        item = next((q for q in data[key] if q["id"] == question_id), None)
+        if not item:
+            query.message.reply_text(
+                "❌ Пункт не найден!",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+            context.user_data.clear()
+            context.user_data['conversation_state'] = 'ERROR'
+            context.user_data['conversation_active'] = False
+            return ConversationHandler.END
+        current_value = ""
+        if query.data == f'edit_{data_type}_field_question':
+            current_value = f"Текущий вопрос: {item['question']}\n"
+        elif query.data == f'edit_{data_type}_field_answer':
+            current_value = f"Текущий ответ: {item.get('answer', 'Отсутствует')}\n"
+        elif query.data == f'edit_{data_type}_field_photo':
+            current_value = f"Текущие фото: {len(item.get('photos', []))} шт.\n"
+        prompt = f"{current_value}✏️ Введите новый {field}:\n(Напишите /cancel для отмены)"
         query.message.reply_text(
             prompt,
             reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
@@ -1236,62 +1282,75 @@ def receive_edit_field(update: Update, context: CallbackContext):
 # Обработка значения для редактирования
 @restrict_access
 def receive_edit_value(update: Update, context: CallbackContext):
-    if not context.user_data.get('conversation_active', False):
-        logger.warning(f"Пользователь {update.effective_user.id} попытался отправить значение для редактирования в неактивном диалоге")
-        update.message.reply_text(
-            f"❌ Пожалуйста, начните редактирование {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
-            reply_markup=MAIN_MENU,
-            quote=False
-        )
-        context.user_data.clear()
-        context.user_data['conversation_state'] = 'INVALID_EDIT_VALUE'
-        context.user_data['conversation_active'] = False
-        return ConversationHandler.END
     data_type = context.user_data.get('data_type', 'guide')
     try:
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        edit_field = context.user_data['edit_field']
+        field = "вопрос" if edit_field == f'edit_{data_type}_field_question' else "ответ" if edit_field == f'edit_{data_type}_field_answer' else "фото/документы"
         data = load_data(data_type)
         key = 'questions' if data_type == 'guide' else 'templates'
         question_id = context.user_data['edit_question_id']
-        field = context.user_data['edit_field']
-        for q in data[key]:
-            if q["id"] == question_id:
-                if field == f'edit_{data_type}_field_question':
-                    q['question'] = update.message.text
-                    logger.info(f"Пользователь {update.effective_user.id} обновил вопрос для {data_type} ID {question_id}: {q['question']}")
-                elif field == f'edit_{data_type}_field_answer':
-                    q['answer'] = update.message.text
-                    logger.info(f"Пользователь {update.effective_user.id} обновил ответ для {data_type} ID {question_id}: {q['answer']}")
-                elif field == f'edit_{data_type}_field_photo' and ENABLE_PHOTOS:
-                    if update.message.photo:
-                        q['photos'] = [update.message.photo[-1].file_id]
-                        logger.info(f"Пользователь {update.effective_user.id} обновил фото для {data_type} ID {question_id}: {q['photos']}")
-                        q.pop('photo', None)
-                    else:
-                        update.message.reply_text(
-                            f"❌ Пожалуйста, отправьте фото или альбом!\n(Напишите /cancel для отмены)",
-                            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
-                            quote=False
-                        )
-                        return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
-                break
+        item = next((q for q in data[key] if q["id"] == question_id), None)
+        if not item:
+            update.message.reply_text(
+                "❌ Пункт не найден!",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
+            context.user_data.clear()
+            context.user_data['conversation_state'] = 'ERROR'
+            context.user_data['conversation_active'] = False
+            return ConversationHandler.END
+        if edit_field == f'edit_{data_type}_field_question':
+            item['question'] = update.message.text
+        elif edit_field == f'edit_{data_type}_field_answer':
+            item['answer'] = update.message.text
+        elif edit_field == f'edit_{data_type}_field_photo':
+            if update.message.photo:
+                item['photos'] = [photo.file_id for photo in update.message.photo]
+                item['documents'] = []
+            elif update.message.document:
+                doc = update.message.document
+                if doc.mime_type not in [
+                    'application/msword',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'application/pdf',
+                    'application/vnd.ms-excel',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                ]:
+                    update.message.reply_text(
+                        "❌ Поддерживаются только файлы .doc, .docx, .pdf, .xls, .xlsx!",
+                        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                        quote=False
+                    )
+                    return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
+                if doc.file_size > 20 * 1024 * 1024:
+                    update.message.reply_text(
+                        "❌ Файл слишком большой! Максимальный размер — 20 МБ.",
+                        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+                        quote=False
+                    )
+                    return GUIDE_EDIT_VALUE if data_type == 'guide' else TEMPLATE_EDIT_VALUE
+                item['photos'] = []
+                item['documents'] = [doc.file_id]
         save_data(data_type, data)
-        logger.info(f"Пользователь {update.effective_user.id} обновил {field} для {data_type} ID {question_id}")
-        context.user_data.clear()
-        context.user_data['conversation_state'] = f'EDIT_{data_type.upper()}_VALUE'
-        context.user_data['conversation_active'] = False
         update.message.reply_text(
-            f"✏️ {'Вопрос' if field == f'edit_{data_type}_field_question' else 'Ответ' if field == f'edit_{data_type}_field_answer' else 'Фото'} обновлён!",
+            f"✅ {field.capitalize()} успешно изменён!",
             reply_markup=MAIN_MENU,
             quote=False
         )
+        logger.info(f"Пользователь {user_display} изменил {field} для {data_type} ID {question_id}")
+        context.user_data.clear()
+        context.user_data['conversation_state'] = f'{data_type.upper()}_EDITED'
+        context.user_data['conversation_active'] = False
         return ConversationHandler.END
     except Exception as e:
-        logger.error(f"Ошибка в receive_edit_value для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        logger.error(f"Ошибка в receive_edit_value для пользователя {user_display}: {str(e)}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
         update.message.reply_text(
-            "❌ Ошибка при обновлении значения. Попробуйте снова.",
+            "❌ Произошла ошибка при редактировании. Попробуйте снова.",
             reply_markup=MAIN_MENU,
             quote=False
         )
@@ -1312,37 +1371,31 @@ def handle_invalid_input(update: Update, context: CallbackContext):
     )
     return ConversationHandler.END
 
-# Запуск бота
+#Запуск бота
 def main():
+    load_dotenv()
+    logger.info("Загружен файл .env")
     updater = Updater(os.getenv("BOT_TOKEN"), use_context=True)
     dp = updater.dispatcher
     dp.add_error_handler(error_handler)
 
-    # Регистрация ConversationHandler'ов в начале для повышения приоритета
+    # ConversationHandler для добавления пункта в справочник
     guide_add_conv = ConversationHandler(
         entry_points=[MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point)],
         states={
             GUIDE_QUESTION: [
-                MessageHandler(
-                    Filters.text & ~Filters.command,
-                    receive_question
-                ),
+                MessageHandler(Filters.text & ~Filters.command, receive_question),
+                CommandHandler("cancel", cancel),
             ],
             GUIDE_ANSWER: [
-                MessageHandler(
-                    Filters.text & ~Filters.command,
-                    receive_answer
-                ),
-                MessageHandler(Filters.photo, receive_answer) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(Filters.photo | Filters.document, receive_answer) if ENABLE_PHOTOS else None,
+                MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
             GUIDE_ANSWER_PHOTOS: [
-                MessageHandler(Filters.photo, receive_answer_photos) if ENABLE_PHOTOS else None,
-                MessageHandler(
-                    Filters.text & ~Filters.command,
-                    receive_answer
-                ),
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+                MessageHandler(Filters.photo | Filters.document, receive_answer_files) if ENABLE_PHOTOS else None,
+                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -1351,30 +1404,23 @@ def main():
         allow_reentry=False,
     )
 
+    # ConversationHandler для добавления шаблона
     template_add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_template, pattern='^add_template$')],
         states={
             TEMPLATE_QUESTION: [
-                MessageHandler(
-                    Filters.text & ~Filters.command,
-                    receive_question
-                ),
+                MessageHandler(Filters.text & ~Filters.command, receive_question),
+                CommandHandler("cancel", cancel),
             ],
             TEMPLATE_ANSWER: [
-                MessageHandler(
-                    Filters.text & ~Filters.command,
-                    receive_answer
-                ),
-                MessageHandler(Filters.photo, receive_answer) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(Filters.photo | Filters.document, receive_answer) if ENABLE_PHOTOS else None,
+                MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
             TEMPLATE_ANSWER_PHOTOS: [
-                MessageHandler(Filters.photo, receive_answer_photos) if ENABLE_PHOTOS else None,
-                MessageHandler(
-                    Filters.text & ~Filters.command,
-                    receive_answer
-                ),
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+                MessageHandler(Filters.photo | Filters.document, receive_answer_files) if ENABLE_PHOTOS else None,
+                MessageHandler(Filters.text & ~Filters.command, receive_answer),
+                MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -1383,6 +1429,7 @@ def main():
         allow_reentry=False,
     )
 
+    # ConversationHandler для редактирования пункта справочника
     guide_edit_conv = ConversationHandler(
         entry_points=[MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point)],
         states={
@@ -1394,12 +1441,9 @@ def main():
                 CallbackQueryHandler(receive_edit_field, pattern=r'^(edit_guide_field_(question|answer|photo|delete)|cancel_guide_edit)$'),
             ],
             GUIDE_EDIT_VALUE: [
-                MessageHandler(
-                    Filters.text & ~Filters.command,
-                    receive_edit_value
-                ),
-                MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+                MessageHandler(Filters.text & ~Filters.command, receive_edit_value),
+                MessageHandler(Filters.photo | Filters.document, receive_edit_value) if ENABLE_PHOTOS else None,
+                MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -1409,6 +1453,7 @@ def main():
         allow_reentry=False,
     )
 
+    # ConversationHandler для редактирования шаблона
     template_edit_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(edit_template, pattern='^edit_template$')],
         states={
@@ -1420,12 +1465,9 @@ def main():
                 CallbackQueryHandler(receive_edit_field, pattern=r'^(edit_template_field_(question|answer|photo|delete)|cancel_template_edit)$'),
             ],
             TEMPLATE_EDIT_VALUE: [
-                MessageHandler(
-                    Filters.text & ~Filters.command,
-                    receive_edit_value
-                ),
-                MessageHandler(Filters.photo, receive_edit_value) if ENABLE_PHOTOS else None,
-                MessageHandler(~(Filters.text | Filters.photo) & ~Filters.command, handle_invalid_input),
+                MessageHandler(Filters.text & ~Filters.command, receive_edit_value),
+                MessageHandler(Filters.photo | Filters.document, receive_edit_value) if ENABLE_PHOTOS else None,
+                MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -1444,6 +1486,10 @@ def main():
     # Регистрация основных команд
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("cancel", cancel))
+    dp.add_handler(CommandHandler("search", lambda update, context: update.message.reply_text(
+        "🔍 Введите ключевое слово для поиска:",
+        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+    )))
 
     # Регистрация обработчиков меню
     dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
@@ -1455,7 +1501,7 @@ def main():
     dp.add_handler(CallbackQueryHandler(handle_pagination, pattern=r'^(guide|template)_page_\d+$'))
     dp.add_handler(CallbackQueryHandler(show_answer, pattern=r'^(guide|template)_question_\d+$'))
     dp.add_handler(CallbackQueryHandler(handle_template_action, pattern='^(add_template|edit_template|cancel_template)$'))
-    dp.add_handler(CallbackQueryHandler(delete_answer, pattern='^delete_answer$'))
+    dp.add_handler(CallbackQueryHandler(delete_answer, pattern=r'^delete_\d+$|^delete_[\d,]+$'))
 
     # Регистрация обработчика поиска
     dp.add_handler(MessageHandler(
