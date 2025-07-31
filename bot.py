@@ -435,10 +435,10 @@ def show_answer(update: Update, context: CallbackContext):
             )
             return
         logger.info(f"Пользователь {user_display} запросил ответ для {data_type} ID {question_id}")
-        # Формируем текст, включая вопрос и ответ (если есть)
+        # Формируем текст с вопросом и ответом в требуемом формате
         question_text = item.get('question', 'Вопрос отсутствует')
         answer_text = item.get('answer', 'Ответ отсутствует')
-        text = f"📄 Вопрос: {question_text}\nОтвет: {answer_text}"
+        text = f"Вопрос: {question_text}\nОтвет:\n{answer_text}"
         photo_ids = item.get('photos', [])
         doc_ids = item.get('documents', [])
         message_ids = []
@@ -456,28 +456,25 @@ def show_answer(update: Update, context: CallbackContext):
                 messages = query.message.reply_media_group(media=media)
                 message_ids.extend([msg.message_id for msg in messages])
                 delete_message = query.message.reply_text(
-                    "🗑 Удалить",
+                    "🗑 Удалить все фото",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{",".join(map(str, message_ids))}')]])
                 )
                 message_ids.append(delete_message.message_id)
         elif doc_ids:
-            # Отправляем первое сообщение с текстом и первым документом (если есть)
+            # Отправляем первое сообщение с текстом и первым документом (без кнопки удаления)
             if len(doc_ids) >= 1:
                 message = query.message.reply_document(
                     document=doc_ids[0],
-                    caption=text,
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{query.message.message_id + 1}')]])
+                    caption=text
                 )
                 message_ids.append(message.message_id)
-                # Отправляем остальные документы без подписи
+                # Отправляем остальные документы без подписи и без кнопки удаления
                 for doc_id in doc_ids[1:]:
                     message = query.message.reply_document(
-                        document=doc_id,
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{query.message.message_id + 1 + len(message_ids)}')]])
+                        document=doc_id
                     )
                     message_ids.append(message.message_id)
-            if len(doc_ids) > 1:
-                # Добавляем общее сообщение с кнопкой удаления для всех документов
+                # Добавляем сообщение с кнопкой удаления всех документов
                 delete_message = query.message.reply_text(
                     "🗑 Удалить все документы",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_{",".join(map(str, message_ids))}')]])
