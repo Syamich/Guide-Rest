@@ -1884,12 +1884,7 @@ def delete_answer(update: Update, context: CallbackContext):
         message_ids = context.user_data.get('answer_message_ids', [])
         if not message_ids:
             logger.warning(f"Пользователь {user_display} попытался удалить сообщения, но answer_message_ids пуст")
-            query.message.reply_text(
-                "❌ Сообщения для удаления не найдены!",
-                reply_markup=MAIN_MENU,
-                quote=False
-            )
-            return
+            return ConversationHandler.END
         chat_id = query.message.chat_id
         deleted_count = 0
         for message_id in message_ids:
@@ -1901,22 +1896,12 @@ def delete_answer(update: Update, context: CallbackContext):
                 logger.debug(f"Не удалось удалить сообщение {message_id} в чате {chat_id}: {str(e)}")
         context.user_data['answer_message_ids'] = []
         context.user_data['current_question_id'] = None
-        query.message.reply_text(
-            f"🗑 Удалено {deleted_count} сообщений!",
-            reply_markup=MAIN_MENU,
-            quote=False
-        )
         logger.info(f"Пользователь {user_display} успешно удалил {deleted_count} сообщений")
         context.user_data['conversation_state'] = 'DELETE_ANSWER'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
     except Exception as e:
         logger.error(f"Ошибка в delete_answer для пользователя {user_display}: {str(e)}", exc_info=True)
-        query.message.reply_text(
-            "❌ Не удалось удалить сообщения. Попробуйте снова.",
-            reply_markup=MAIN_MENU,
-            quote=False
-        )
         return ConversationHandler.END
 
 if __name__ == '__main__':
