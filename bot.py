@@ -985,7 +985,6 @@ def save_new_point(update: Update, context: CallbackContext, send_message: bool 
 
 
 @restrict_access
-@restrict_access
 def receive_answer_files(update: Update, context: CallbackContext):
     data_type = context.user_data.get('data_type', 'guide')
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
@@ -1028,7 +1027,7 @@ def receive_answer_files(update: Update, context: CallbackContext):
                 logger.debug(f"Пользователь {user_display} продолжает отправку альбома {media_group_id}, пропускаем")
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
             context.user_data['album_processing'] = True
-            # Берем последнюю версию фото (наибольшее разрешение) из текущего сообщения
+            # Берем последнюю версию фото (наибольшее разрешение)
             new_photo = update.message.photo[-1].file_id
             if new_photo not in context.user_data['pending_photos']:
                 context.user_data['pending_photos'].append(new_photo)
@@ -1098,13 +1097,16 @@ def receive_answer_files(update: Update, context: CallbackContext):
                     quote=False
                 )
         elif update.message.text == "Готово":
-            if not (context.user_data.get('photos') or context.user_data.get('documents')):
+            if not context.user_data.get('new_question'):
                 update.message.reply_text(
-                    "❌ Отправьте хотя бы один файл перед завершением!",
-                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                    "❌ Вопрос не задан! Начните добавление заново.",
+                    reply_markup=MAIN_MENU,
                     quote=False
                 )
-                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+                context.user_data.clear()
+                context.user_data['conversation_state'] = 'NO_QUESTION'
+                context.user_data['conversation_active'] = False
+                return ConversationHandler.END
             if context.user_data.get('pending_photos'):
                 unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
                 context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
@@ -1135,7 +1137,6 @@ def receive_answer_files(update: Update, context: CallbackContext):
         return ConversationHandler.END
 
 # Обработчик кнопки удаления
-@restrict_access
 @restrict_access
 def delete_message(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -1196,7 +1197,6 @@ def delete_message(update: Update, context: CallbackContext):
 
 # Обработка фотографий для ответа
 @restrict_access
-@restrict_access
 def receive_answer(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
         logger.warning(f"Пользователь {update.effective_user.id} попытался отправить ответ без активного диалога или вопроса")
@@ -1224,13 +1224,16 @@ def receive_answer(update: Update, context: CallbackContext):
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
 
     if update.message.text == "Готово":
-        if not (context.user_data.get('photos') or context.user_data.get('documents')):
+        if not context.user_data.get('new_question'):
             update.message.reply_text(
-                "❌ Отправьте хотя бы один файл перед завершением!",
-                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                "❌ Вопрос не задан! Начните добавление заново.",
+                reply_markup=MAIN_MENU,
                 quote=False
             )
-            return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            context.user_data.clear()
+            context.user_data['conversation_state'] = 'NO_QUESTION'
+            context.user_data['conversation_active'] = False
+            return ConversationHandler.END
         if context.user_data.get('pending_photos'):
             unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
             context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
