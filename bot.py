@@ -904,7 +904,7 @@ def check_album_timeout(context: CallbackContext):
     if context.user_data.get('last_photo_time') == update.message.date and not context.user_data.get('point_saved'):
         data_type = context.user_data.get('data_type', 'guide')
         user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-        logger.info(f"Пользователь {user_display} завершил альбом для {data_type} media group {context.user_data.get('media_group_id')}")
+        logger.info(f"Пользователь {user_display} завершил альбом для {data_type} media group {context.user_data.get('last_processed_media_group_id')}")
         if context.user_data.get('loading_message_id'):
             try:
                 context.bot.delete_message(
@@ -926,9 +926,8 @@ def check_album_timeout(context: CallbackContext):
             )
         context.user_data['album_processing'] = False
         context.user_data['last_processed_media_group_id'] = None
-        context.user_data['point_saved'] = True
         context.user_data['timeout_task'] = None
-        logger.info(f"Пользователь {user_display} завершил add_{data_type}_conv в check_album_timeout")
+        logger.info(f"Пользователь {user_display} завершил обработку альбома в check_album_timeout")
     return None
 
 # Сохранение нового пункта
@@ -986,6 +985,7 @@ def save_new_point(update: Update, context: CallbackContext, send_message: bool 
 
 
 @restrict_access
+@restrict_access
 def receive_answer_files(update: Update, context: CallbackContext):
     data_type = context.user_data.get('data_type', 'guide')
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
@@ -1025,15 +1025,14 @@ def receive_answer_files(update: Update, context: CallbackContext):
 
         if update.message.photo:
             if context.user_data['album_processing'] and media_group_id == context.user_data['last_processed_media_group_id']:
-                # Пропускаем обработку, если альбом уже обрабатывается
                 logger.debug(f"Пользователь {user_display} продолжает отправку альбома {media_group_id}, пропускаем")
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
             context.user_data['album_processing'] = True
-            # Сохраняем время получения фото
-            context.user_data['last_photo_time'] = update.message.date
-            new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['pending_photos']]
-            context.user_data['pending_photos'].extend(new_photos)
-            logger.debug(f"Пользователь {user_display} добавил в pending_photos: {new_photos}, media_group_id: {media_group_id}")
+            # Берем только последнюю версию фото (наибольшее разрешение)
+            new_photo = update.message.photo[-1].file_id
+            if new_photo not in context.user_data['pending_photos']:
+                context.user_data['pending_photos'].append(new_photo)
+            logger.debug(f"Пользователь {user_display} добавил в pending_photos: {new_photo}, media_group_id: {media_group_id}")
             # Сохраняем подпись, если она есть и ответ еще не задан
             if update.message.caption and not context.user_data.get('answer'):
                 context.user_data['answer'] = update.message.caption
@@ -1137,11 +1136,13 @@ def receive_answer_files(update: Update, context: CallbackContext):
 
 # Обработчик кнопки удаления
 @restrict_access
+@restrict_access
 def delete_message(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     try:
         user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.debug(f"Пользователь {user_display} вызвал delete_message с callback_data: {query.data}")
         if query.data.startswith('delete_answer_'):
             question_id = int(query.data.split('_')[-1])
             if context.user_data.get('current_question_id') != question_id:
@@ -1178,6 +1179,13 @@ def delete_message(update: Update, context: CallbackContext):
                 quote=False
             )
             logger.info(f"Пользователь {user_display} успешно удалил {deleted_count} сообщений")
+        else:
+            logger.warning(f"Неверный callback_data в delete_message: {query.data}")
+            query.message.reply_text(
+                "❌ Неверный запрос на удаление!",
+                reply_markup=MAIN_MENU,
+                quote=False
+            )
     except Exception as e:
         logger.error(f"Ошибка в delete_message для пользователя {user_display}: {str(e)}", exc_info=True)
         query.message.reply_text(
