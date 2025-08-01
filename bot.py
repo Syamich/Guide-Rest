@@ -785,18 +785,13 @@ def receive_answer(update: Update, context: CallbackContext):
         context.user_data['photos'] = []
     if 'documents' not in context.user_data:
         context.user_data['documents'] = []
+    if 'pending_photos' not in context.user_data:
+        context.user_data['pending_photos'] = []
     if 'last_processed_media_group_id' not in context.user_data:
         context.user_data['last_processed_media_group_id'] = None
 
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
     media_group_id = update.message.media_group_id
-    if media_group_id and context.user_data['last_processed_media_group_id'] == media_group_id:
-        logger.debug(f"Пропущено повторное сообщение альбома {media_group_id} для пользователя {user_display}")
-        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-    context.user_data['last_processed_media_group_id'] = media_group_id
-
-    context.user_data['answer'] = update.message.caption if (update.message.photo or update.message.document) and update.message.caption else update.message.text if update.message.text and update.message.text != "Готово" else ""
-    context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
 
     if ENABLE_PHOTOS and (update.message.photo or update.message.document):
         total_files = len(context.user_data['photos']) + len(context.user_data['documents'])
@@ -812,17 +807,25 @@ def receive_answer(update: Update, context: CallbackContext):
             context.user_data['conversation_active'] = False
             return ConversationHandler.END
         if update.message.photo:
-            new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['photos']]
-            if new_photos:
-                context.user_data['photos'].extend(new_photos)
-                logger.info(f"Пользователь {user_display} добавил {len(new_photos)} новых фото в {data_type}: {new_photos}")
+            # Накопление фотографий для текущего альбома
+            new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['pending_photos']]
+            context.user_data['pending_photos'].extend(new_photos)
+            logger.debug(f"Пользователь {user_display} добавил в pending_photos: {new_photos}, media_group_id: {media_group_id}")
+            # Если это последний вызов для альбома (или одиночное фото без media_group_id)
+            if not media_group_id or context.user_data['last_processed_media_group_id'] != media_group_id:
+                # Переносим уникальные фотографии из pending_photos в photos
+                unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+                context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+                logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото в {data_type}: {unique_photos}")
+                context.user_data['pending_photos'] = []  # Очищаем временный список
+                context.user_data['last_processed_media_group_id'] = media_group_id
                 update.message.reply_text(
                     f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
                     reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                     quote=False
                 )
             else:
-                logger.debug(f"Фотографии уже обработаны для альбома {media_group_id} пользователем {user_display}")
+                logger.debug(f"Ожидание завершения альбома {media_group_id} для пользователя {user_display}")
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         elif update.message.document:
             doc = update.message.document
@@ -854,6 +857,8 @@ def receive_answer(update: Update, context: CallbackContext):
                     reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                     quote=False
                 )
+        context.user_data['answer'] = update.message.caption if (update.message.photo or update.message.document) and update.message.caption else ""
+        context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
         return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     if update.message.text == "Готово":
         if not (context.user_data.get('answer') or context.user_data.get('photos') or context.user_data.get('documents')):
@@ -863,13 +868,21 @@ def receive_answer(update: Update, context: CallbackContext):
                 quote=False
             )
             return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+        # Переносим оставшиеся фотографии из pending_photos, если есть
+        if context.user_data['pending_photos']:
+            unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+            context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+            logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
+            context.user_data['pending_photos'] = []
         save_new_point(update, context, send_message=True)
         logger.info(f"Пользователь {user_display} завершил add_{data_type}_conv в receive_answer")
         context.user_data.clear()
         context.user_data['conversation_state'] = f'{data_type.upper()}_POINT_SAVED'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
-    if context.user_data.get('answer'):
+    if update.message.text:
+        context.user_data['answer'] = update.message.text
+        context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
         save_new_point(update, context, send_message=True)
         logger.info(f"Пользователь {user_display} завершил add_{data_type}_conv в receive_answer")
         context.user_data.clear()
@@ -971,6 +984,8 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['photos'] = []
         if 'documents' not in context.user_data:
             context.user_data['documents'] = []
+        if 'pending_photos' not in context.user_data:
+            context.user_data['pending_photos'] = []
         if 'last_processed_media_group_id' not in context.user_data:
             context.user_data['last_processed_media_group_id'] = None
 
@@ -978,7 +993,6 @@ def receive_answer_files(update: Update, context: CallbackContext):
         if media_group_id and context.user_data['last_processed_media_group_id'] == media_group_id:
             logger.debug(f"Пропущено повторное сообщение альбома {media_group_id} для пользователя {user_display}")
             return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-        context.user_data['last_processed_media_group_id'] = media_group_id
 
         total_files = len(context.user_data['photos']) + len(context.user_data['documents'])
         if total_files >= MAX_MEDIA_PER_ALBUM:
@@ -993,17 +1007,25 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['conversation_active'] = False
             return ConversationHandler.END
         if update.message.photo:
-            new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['photos']]
-            if new_photos:
-                context.user_data['photos'].extend(new_photos)
+            # Накопление фотографий для текущего альбома
+            new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['pending_photos']]
+            context.user_data['pending_photos'].extend(new_photos)
+            logger.debug(f"Пользователь {user_display} добавил в pending_photos: {new_photos}, media_group_id: {media_group_id}")
+            # Если это последний вызов для альбома (или одиночное фото без media_group_id)
+            if not media_group_id or context.user_data['last_processed_media_group_id'] != media_group_id:
+                # Переносим уникальные фотографии из pending_photos в photos
+                unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+                context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+                logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото в {data_type}: {unique_photos}")
+                context.user_data['pending_photos'] = []  # Очищаем временный список
+                context.user_data['last_processed_media_group_id'] = media_group_id
                 update.message.reply_text(
                     f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
                     reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                     quote=False
                 )
-                logger.info(f"Пользователь {user_display} добавил {len(new_photos)} новых фото, всего: {len(context.user_data['photos'])}")
             else:
-                logger.debug(f"Фотографии уже обработаны для альбома {media_group_id} пользователем {user_display}")
+                logger.debug(f"Ожидание завершения альбома {media_group_id} для пользователя {user_display}")
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         elif update.message.document:
             doc = update.message.document
@@ -1043,6 +1065,12 @@ def receive_answer_files(update: Update, context: CallbackContext):
                     quote=False
                 )
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            # Переносим оставшиеся фотографии из pending_photos, если есть
+            if context.user_data['pending_photos']:
+                unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+                context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+                logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
+                context.user_data['pending_photos'] = []
             save_new_point(update, context, send_message=True)
             context.user_data.clear()
             context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
