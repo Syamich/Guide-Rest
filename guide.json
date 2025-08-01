@@ -146,6 +146,19 @@
       "answer": "1. По номеру закупки переходим в портал\n2. Кнопка \"Редактировать\"\n3. Тарифная группа - выбираем нужный тариф\n4. Спускаемся к извещению и проваливаемся в него\n5. Далее вкладка \"Извещение о проведении закупки иным способом\"\n6. Там уже жмем кнопку \"Обновить на ЭТП\"\n7. Проверяем на сайте изменился тариф или нет",
       "photos": [],
       "documents": []
+    },
+    {
+      "id": 28,
+      "question": "Способы закупок",
+      "answer": "",
+      "photos": [
+        "AgACAgIAAxkBAAISNmiMQwhkh7TOeO3P_idO82Uul2kgAAKH-zEb5BdhSJ8O28DitEoiAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAISN2iMQwhVNiwhgC9C0SE0HnaIycuQAAJj-TEbjIRgSNwC0invTwEaAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAISOGiMQwjHU_GzmI9qvK74w1iXvvK8AAJk-TEbjIRgSAwF5Ni78WU3AQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAISOWiMQwh2YcFB59QRHUCxx9KnnJKvAAJl-TEbjIRgSJL8IO6ptV1XAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAISOmiMQwj3N4sprwpalDzOooRR66BSAALv7zEbJE9hSFODdCmm9dooAQADAgADeQADNgQ"
+      ],
+      "documents": []
     }
   ]
 }
