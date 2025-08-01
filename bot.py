@@ -911,6 +911,11 @@ def check_album_timeout(context: CallbackContext):
                 logger.info(f"Пользователь {update.effective_user.id} удалил сообщение о загрузке")
             except Exception as e:
                 logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
+        if context.user_data.get('pending_photos'):
+            unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+            context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+            logger.info(f"Пользователь {update.effective_user.id} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
+            context.user_data['pending_photos'] = []
         save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True
         context.user_data['timeout_task'] = None
@@ -988,45 +993,64 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['pending_photos'] = []
         if 'last_processed_media_group_id' not in context.user_data:
             context.user_data['last_processed_media_group_id'] = None
+        if 'last_photo_time' not in context.user_data:
+            context.user_data['last_photo_time'] = None
 
         media_group_id = update.message.media_group_id
-        if media_group_id and context.user_data['last_processed_media_group_id'] == media_group_id:
-            logger.debug(f"Пропущено повторное сообщение альбома {media_group_id} для пользователя {user_display}")
-            return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-
         total_files = len(context.user_data['photos']) + len(context.user_data['documents'])
+
         if total_files >= MAX_MEDIA_PER_ALBUM:
             update.message.reply_text(
                 f"❌ Максимум {MAX_MEDIA_PER_ALBUM} файлов (фото или документы) на пункт! Сохраняем текущие файлы.",
                 reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                 quote=False
             )
+            if context.user_data.get('pending_photos'):
+                unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+                context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+                logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
+                context.user_data['pending_photos'] = []
             save_new_point(update, context, send_message=True)
             context.user_data.clear()
             context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
             context.user_data['conversation_active'] = False
             return ConversationHandler.END
+
         if update.message.photo:
-            # Накопление фотографий для текущего альбома
+            # Сохраняем время получения фото
+            context.user_data['last_photo_time'] = update.message.date
             new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['pending_photos']]
             context.user_data['pending_photos'].extend(new_photos)
             logger.debug(f"Пользователь {user_display} добавил в pending_photos: {new_photos}, media_group_id: {media_group_id}")
-            # Если это последний вызов для альбома (или одиночное фото без media_group_id)
-            if not media_group_id or context.user_data['last_processed_media_group_id'] != media_group_id:
-                # Переносим уникальные фотографии из pending_photos в photos
-                unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
-                context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
-                logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото в {data_type}: {unique_photos}")
-                context.user_data['pending_photos'] = []  # Очищаем временный список
-                context.user_data['last_processed_media_group_id'] = media_group_id
-                update.message.reply_text(
-                    f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
-                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-                    quote=False
+            # Сохраняем подпись, если она есть
+            if update.message.caption:
+                context.user_data['answer'] = update.message.caption
+            # Планируем тайм-аут для обработки альбома
+            if media_group_id and context.user_data['last_processed_media_group_id'] != media_group_id:
+                if context.user_data.get('timeout_task'):
+                    context.user_data['timeout_task'].cancel()
+                context.user_data['timeout_task'] = context.job_queue.run_once(
+                    check_album_timeout,
+                    2,  # Ждем 2 секунды для завершения альбома
+                    context=(update, context)
                 )
-            else:
-                logger.debug(f"Ожидание завершения альбома {media_group_id} для пользователя {user_display}")
+                context.user_data['last_processed_media_group_id'] = media_group_id
+                logger.debug(f"Запланирован тайм-аут для альбома {media_group_id} для пользователя {user_display}")
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            # Если это не альбом или альбом завершен
+            unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+            context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+            logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото в {data_type}: {unique_photos}")
+            context.user_data['pending_photos'] = []
+            context.user_data['last_processed_media_group_id'] = None
+            if context.user_data.get('timeout_task'):
+                context.user_data['timeout_task'].cancel()
+                context.user_data['timeout_task'] = None
+            update.message.reply_text(
+                f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                quote=False
+            )
         elif update.message.document:
             doc = update.message.document
             if doc.mime_type not in [
@@ -1051,12 +1075,14 @@ def receive_answer_files(update: Update, context: CallbackContext):
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
             if doc.file_id not in context.user_data['documents']:
                 context.user_data['documents'].append(doc.file_id)
+                logger.info(f"Пользователь {user_display} добавил документ в {data_type}: {doc.file_id}")
+                if update.message.caption:
+                    context.user_data['answer'] = update.message.caption
                 update.message.reply_text(
                     f"✅ Документ добавлен ({len(context.user_data['documents'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
                     reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                     quote=False
                 )
-                logger.info(f"Пользователь {user_display} добавил документ {os.path.splitext(doc.file_name)[1].lower()}, всего: {len(context.user_data['documents'])}")
         elif update.message.text == "Готово":
             if not (context.user_data.get('photos') or context.user_data.get('documents') or context.user_data.get('answer')):
                 update.message.reply_text(
@@ -1065,8 +1091,7 @@ def receive_answer_files(update: Update, context: CallbackContext):
                     quote=False
                 )
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-            # Переносим оставшиеся фотографии из pending_photos, если есть
-            if context.user_data['pending_photos']:
+            if context.user_data.get('pending_photos'):
                 unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
                 context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
                 logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
@@ -1162,48 +1187,8 @@ def receive_answer(update: Update, context: CallbackContext):
         context.user_data['conversation_state'] = 'INVALID_DATA_TYPE'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
-    if 'photos' not in context.user_data:
-        context.user_data['photos'] = []
-    if 'documents' not in context.user_data:
-        context.user_data['documents'] = []
-    # Сохраняем текст ответа, если он есть
-    context.user_data['answer'] = update.message.caption if (update.message.photo or update.message.document) and update.message.caption else update.message.text if update.message.text and update.message.text != "Готово" else ""
-    context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
-    if ENABLE_PHOTOS and (update.message.photo or update.message.document):
-        if update.message.photo:
-            context.user_data['photos'].append(update.message.photo[-1].file_id)
-            logger.info(f"Пользователь {update.effective_user.id} добавил одно фото в {data_type}: {context.user_data['photos'][-1]}")
-        elif update.message.document:
-            doc = update.message.document
-            if doc.mime_type not in [
-                'application/msword',
-                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'application/pdf',
-                'application/vnd.ms-excel',
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            ]:
-                update.message.reply_text(
-                    "❌ Поддерживаются только файлы .doc, .docx, .pdf, .xls, .xlsx!",
-                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-                    quote=False
-                )
-                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-            if doc.file_size > 20 * 1024 * 1024:
-                update.message.reply_text(
-                    "❌ Файл слишком большой! Максимальный размер — 20 МБ.",
-                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-                    quote=False
-                )
-                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-            context.user_data['documents'].append(doc.file_id)
-            logger.info(f"Пользователь {update.effective_user.id} добавил документ в {data_type}: {doc.file_id}")
-        update.message.reply_text(
-            f"✅ Файл добавлен ({len(context.user_data['photos']) + len(context.user_data['documents'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
-            reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-            quote=False
-        )
-        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-    # Проверяем, есть ли текст, фото или документы перед сохранением
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+
     if update.message.text == "Готово":
         if not (context.user_data.get('answer') or context.user_data.get('photos') or context.user_data.get('documents')):
             update.message.reply_text(
@@ -1212,23 +1197,28 @@ def receive_answer(update: Update, context: CallbackContext):
                 quote=False
             )
             return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+        if context.user_data.get('pending_photos'):
+            unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+            context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+            logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
+            context.user_data['pending_photos'] = []
         save_new_point(update, context, send_message=True)
-        logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в receive_answer")
+        logger.info(f"Пользователь {user_display} завершил add_{data_type}_conv в receive_answer")
         context.user_data.clear()
         context.user_data['conversation_state'] = f'{data_type.upper()}_POINT_SAVED'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
-    # Сохраняем, если есть текст
-    if context.user_data.get('answer'):
-        save_new_point(update, context, send_message=True)
-        logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в receive_answer")
-        context.user_data.clear()
-        context.user_data['conversation_state'] = f'{data_type.upper()}_POINT_SAVED'
-        context.user_data['conversation_active'] = False
-        return ConversationHandler.END
-    # Запрашиваем файлы или текст
+    if update.message.text:
+        context.user_data['answer'] = update.message.text
+        context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
+        update.message.reply_text(
+            f"✅ Ответ сохранён. Отправьте фото, документ (.doc, .docx, .pdf, .xls, .xlsx) или нажмите 'Готово':",
+            reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+            quote=False
+        )
+        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     update.message.reply_text(
-        "📎 Отправьте фото, документ (.doc, .docx, .pdf, .xls, .xlsx) или текст ответа (или /cancel для отмены):",
+        "📎 Отправьте текст ответа, фото, документ (.doc, .docx, .pdf, .xls, .xlsx) или нажмите 'Готово':",
         reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
         quote=False
     )
