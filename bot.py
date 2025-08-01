@@ -785,9 +785,18 @@ def receive_answer(update: Update, context: CallbackContext):
         context.user_data['photos'] = []
     if 'documents' not in context.user_data:
         context.user_data['documents'] = []
+    if 'last_processed_message_id' not in context.user_data:
+        context.user_data['last_processed_message_id'] = None
+
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    message_id = update.message.message_id
+    if context.user_data['last_processed_message_id'] == message_id:
+        logger.debug(f"Пропущено повторное сообщение {message_id} для пользователя {user_display}")
+        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+    context.user_data['last_processed_message_id'] = message_id
+
     context.user_data['answer'] = update.message.caption if (update.message.photo or update.message.document) and update.message.caption else update.message.text if update.message.text and update.message.text != "Готово" else ""
     context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
-    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
 
     if ENABLE_PHOTOS and (update.message.photo or update.message.document):
         total_files = len(context.user_data['photos']) + len(context.user_data['documents'])
@@ -806,6 +815,11 @@ def receive_answer(update: Update, context: CallbackContext):
             new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['photos']]
             context.user_data['photos'].extend(new_photos)
             logger.info(f"Пользователь {user_display} добавил {len(new_photos)} новых фото в {data_type}: {new_photos}")
+            update.message.reply_text(
+                f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                quote=False
+            )
         elif update.message.document:
             doc = update.message.document
             if doc.mime_type not in [
@@ -831,11 +845,11 @@ def receive_answer(update: Update, context: CallbackContext):
             if doc.file_id not in context.user_data['documents']:
                 context.user_data['documents'].append(doc.file_id)
                 logger.info(f"Пользователь {user_display} добавил документ в {data_type}: {doc.file_id}")
-        update.message.reply_text(
-            f"✅ Файл добавлен ({len(context.user_data['photos']) + len(context.user_data['documents'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
-            reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-            quote=False
-        )
+                update.message.reply_text(
+                    f"✅ Документ добавлен ({len(context.user_data['documents'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
         return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     if update.message.text == "Готово":
         if not (context.user_data.get('answer') or context.user_data.get('photos') or context.user_data.get('documents')):
@@ -953,6 +967,15 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['photos'] = []
         if 'documents' not in context.user_data:
             context.user_data['documents'] = []
+        if 'last_processed_message_id' not in context.user_data:
+            context.user_data['last_processed_message_id'] = None
+
+        message_id = update.message.message_id
+        if context.user_data['last_processed_message_id'] == message_id:
+            logger.debug(f"Пропущено повторное сообщение {message_id} для пользователя {user_display}")
+            return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+        context.user_data['last_processed_message_id'] = message_id
+
         total_files = len(context.user_data['photos']) + len(context.user_data['documents'])
         if total_files >= MAX_MEDIA_PER_ALBUM:
             update.message.reply_text(
@@ -1054,18 +1077,21 @@ def delete_message(update: Update, context: CallbackContext):
                 )
                 return
             chat_id = query.message.chat_id
+            deleted_count = 0
             for message_id in message_ids:
                 try:
                     context.bot.delete_message(chat_id=chat_id, message_id=message_id)
                     logger.info(f"Пользователь {user_display} удалил сообщение {message_id} в чате {chat_id}")
+                    deleted_count += 1
                 except Exception as e:
-                    logger.debug(f"Не удалось удалить сообщение {message_id} в чате {chat_id}: {e}")
+                    logger.debug(f"Не удалось удалить сообщение {message_id} в чате {chat_id}: {str(e)}")
             context.user_data['answer_message_ids'] = []
             query.message.reply_text(
-                "🗑 Сообщения удалены!",
+                f"🗑 Удалено {deleted_count} сообщений!",
                 reply_markup=MAIN_MENU,
                 quote=False
             )
+            logger.info(f"Пользователь {user_display} успешно удалил {deleted_count} сообщений")
     except Exception as e:
         logger.error(f"Ошибка в delete_message для пользователя {user_display}: {str(e)}", exc_info=True)
         query.message.reply_text(
