@@ -785,15 +785,15 @@ def receive_answer(update: Update, context: CallbackContext):
         context.user_data['photos'] = []
     if 'documents' not in context.user_data:
         context.user_data['documents'] = []
-    if 'last_processed_message_id' not in context.user_data:
-        context.user_data['last_processed_message_id'] = None
+    if 'last_processed_media_group_id' not in context.user_data:
+        context.user_data['last_processed_media_group_id'] = None
 
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-    message_id = update.message.message_id
-    if context.user_data['last_processed_message_id'] == message_id:
-        logger.debug(f"Пропущено повторное сообщение {message_id} для пользователя {user_display}")
+    media_group_id = update.message.media_group_id
+    if media_group_id and context.user_data['last_processed_media_group_id'] == media_group_id:
+        logger.debug(f"Пропущено повторное сообщение альбома {media_group_id} для пользователя {user_display}")
         return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-    context.user_data['last_processed_message_id'] = message_id
+    context.user_data['last_processed_media_group_id'] = media_group_id
 
     context.user_data['answer'] = update.message.caption if (update.message.photo or update.message.document) and update.message.caption else update.message.text if update.message.text and update.message.text != "Готово" else ""
     context.user_data['conversation_state'] = f'RECEIVE_{data_type.upper()}_ANSWER'
@@ -813,13 +813,17 @@ def receive_answer(update: Update, context: CallbackContext):
             return ConversationHandler.END
         if update.message.photo:
             new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['photos']]
-            context.user_data['photos'].extend(new_photos)
-            logger.info(f"Пользователь {user_display} добавил {len(new_photos)} новых фото в {data_type}: {new_photos}")
-            update.message.reply_text(
-                f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
-                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-                quote=False
-            )
+            if new_photos:
+                context.user_data['photos'].extend(new_photos)
+                logger.info(f"Пользователь {user_display} добавил {len(new_photos)} новых фото в {data_type}: {new_photos}")
+                update.message.reply_text(
+                    f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
+            else:
+                logger.debug(f"Фотографии уже обработаны для альбома {media_group_id} пользователем {user_display}")
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         elif update.message.document:
             doc = update.message.document
             if doc.mime_type not in [
@@ -967,14 +971,14 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['photos'] = []
         if 'documents' not in context.user_data:
             context.user_data['documents'] = []
-        if 'last_processed_message_id' not in context.user_data:
-            context.user_data['last_processed_message_id'] = None
+        if 'last_processed_media_group_id' not in context.user_data:
+            context.user_data['last_processed_media_group_id'] = None
 
-        message_id = update.message.message_id
-        if context.user_data['last_processed_message_id'] == message_id:
-            logger.debug(f"Пропущено повторное сообщение {message_id} для пользователя {user_display}")
+        media_group_id = update.message.media_group_id
+        if media_group_id and context.user_data['last_processed_media_group_id'] == media_group_id:
+            logger.debug(f"Пропущено повторное сообщение альбома {media_group_id} для пользователя {user_display}")
             return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-        context.user_data['last_processed_message_id'] = message_id
+        context.user_data['last_processed_media_group_id'] = media_group_id
 
         total_files = len(context.user_data['photos']) + len(context.user_data['documents'])
         if total_files >= MAX_MEDIA_PER_ALBUM:
@@ -990,13 +994,17 @@ def receive_answer_files(update: Update, context: CallbackContext):
             return ConversationHandler.END
         if update.message.photo:
             new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['photos']]
-            context.user_data['photos'].extend(new_photos)
-            update.message.reply_text(
-                f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
-                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-                quote=False
-            )
-            logger.info(f"Пользователь {user_display} добавил {len(new_photos)} новых фото, всего: {len(context.user_data['photos'])}")
+            if new_photos:
+                context.user_data['photos'].extend(new_photos)
+                update.message.reply_text(
+                    f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
+                logger.info(f"Пользователь {user_display} добавил {len(new_photos)} новых фото, всего: {len(context.user_data['photos'])}")
+            else:
+                logger.debug(f"Фотографии уже обработаны для альбома {media_group_id} пользователем {user_display}")
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         elif update.message.document:
             doc = update.message.document
             if doc.mime_type not in [
