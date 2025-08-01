@@ -901,25 +901,26 @@ def check_album_timeout(context: CallbackContext):
     update, context = context.job.context
     if context.user_data.get('last_photo_time') == update.message.date and not context.user_data.get('point_saved'):
         data_type = context.user_data.get('data_type', 'guide')
-        logger.info(f"Пользователь {update.effective_user.id} завершил альбом для {data_type} media group {context.user_data.get('media_group_id')}")
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.info(f"Пользователь {user_display} завершил альбом для {data_type} media group {context.user_data.get('media_group_id')}")
         if context.user_data.get('loading_message_id'):
             try:
                 context.bot.delete_message(
                     chat_id=update.effective_chat.id,
                     message_id=context.user_data['loading_message_id']
                 )
-                logger.info(f"Пользователь {update.effective_user.id} удалил сообщение о загрузке")
+                logger.info(f"Пользователь {user_display} удалил сообщение о загрузке")
             except Exception as e:
                 logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
         if context.user_data.get('pending_photos'):
             unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
             context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
-            logger.info(f"Пользователь {update.effective_user.id} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
+            logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
             context.user_data['pending_photos'] = []
         save_new_point(update, context, send_message=True)
         context.user_data['point_saved'] = True
         context.user_data['timeout_task'] = None
-        logger.info(f"Пользователь {update.effective_user.id} завершил add_{data_type}_conv в check_album_timeout")
+        logger.info(f"Пользователь {user_display} завершил add_{data_type}_conv в check_album_timeout")
         context.user_data.clear()
         context.user_data['conversation_state'] = f'{data_type.upper()}_ALBUM_SAVED'
         context.user_data['conversation_active'] = False
@@ -1023,12 +1024,13 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['pending_photos'].extend(new_photos)
             logger.debug(f"Пользователь {user_display} добавил в pending_photos: {new_photos}, media_group_id: {media_group_id}")
             # Сохраняем подпись, если она есть
-            if update.message.caption:
+            if update.message.caption and not context.user_data.get('answer'):
                 context.user_data['answer'] = update.message.caption
             # Планируем тайм-аут для обработки альбома
             if media_group_id and context.user_data['last_processed_media_group_id'] != media_group_id:
                 if context.user_data.get('timeout_task'):
-                    context.user_data['timeout_task'].cancel()
+                    context.user_data['timeout_task'].remove()  # Изменено с cancel() на remove()
+                    logger.debug(f"Удалена предыдущая задача таймаута для пользователя {user_display}")
                 context.user_data['timeout_task'] = context.job_queue.run_once(
                     check_album_timeout,
                     2,  # Ждем 2 секунды для завершения альбома
@@ -1044,8 +1046,9 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['pending_photos'] = []
             context.user_data['last_processed_media_group_id'] = None
             if context.user_data.get('timeout_task'):
-                context.user_data['timeout_task'].cancel()
+                context.user_data['timeout_task'].remove()  # Изменено с cancel() на remove()
                 context.user_data['timeout_task'] = None
+                logger.debug(f"Удалена задача таймаута после обработки альбома для пользователя {user_display}")
             update.message.reply_text(
                 f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
                 reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
@@ -1076,7 +1079,7 @@ def receive_answer_files(update: Update, context: CallbackContext):
             if doc.file_id not in context.user_data['documents']:
                 context.user_data['documents'].append(doc.file_id)
                 logger.info(f"Пользователь {user_display} добавил документ в {data_type}: {doc.file_id}")
-                if update.message.caption:
+                if update.message.caption and not context.user_data.get('answer'):
                     context.user_data['answer'] = update.message.caption
                 update.message.reply_text(
                     f"✅ Документ добавлен ({len(context.user_data['documents'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",

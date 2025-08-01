@@ -146,6 +146,30 @@
       "answer": "1. По номеру закупки переходим в портал\n2. Кнопка \"Редактировать\"\n3. Тарифная группа - выбираем нужный тариф\n4. Спускаемся к извещению и проваливаемся в него\n5. Далее вкладка \"Извещение о проведении закупки иным способом\"\n6. Там уже жмем кнопку \"Обновить на ЭТП\"\n7. Проверяем на сайте изменился тариф или нет",
       "photos": [],
       "documents": []
+    },
+    {
+      "id": 28,
+      "question": "Добавление способов закупки",
+      "answer": "",
+      "photos": [
+        "AgACAgIAAxkBAAISOmiMQwj3N4sprwpalDzOooRR66BSAALv7zEbJE9hSFODdCmm9dooAQADAgADcwADNgQ",
+        "AgACAgIAAxkBAAISOmiMQwj3N4sprwpalDzOooRR66BSAALv7zEbJE9hSFODdCmm9dooAQADAgADbQADNgQ",
+        "AgACAgIAAxkBAAISOmiMQwj3N4sprwpalDzOooRR66BSAALv7zEbJE9hSFODdCmm9dooAQADAgADeAADNgQ",
+        "AgACAgIAAxkBAAISOmiMQwj3N4sprwpalDzOooRR66BSAALv7zEbJE9hSFODdCmm9dooAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAISNWiMQwhhLBNxh4XtzSg8kqvMyGSzAAJi-TEbjIRgSBg0qHarFjQDAQADAgADcwADNgQ",
+        "AgACAgIAAxkBAAISNWiMQwhhLBNxh4XtzSg8kqvMyGSzAAJi-TEbjIRgSBg0qHarFjQDAQADAgADbQADNgQ",
+        "AgACAgIAAxkBAAISNWiMQwhhLBNxh4XtzSg8kqvMyGSzAAJi-TEbjIRgSBg0qHarFjQDAQADAgADeAADNgQ",
+        "AgACAgIAAxkBAAISNWiMQwhhLBNxh4XtzSg8kqvMyGSzAAJi-TEbjIRgSBg0qHarFjQDAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAISNmiMQwhkh7TOeO3P_idO82Uul2kgAAKH-zEb5BdhSJ8O28DitEoiAQADAgADcwADNgQ",
+        "AgACAgIAAxkBAAISNmiMQwhkh7TOeO3P_idO82Uul2kgAAKH-zEb5BdhSJ8O28DitEoiAQADAgADbQADNgQ",
+        "AgACAgIAAxkBAAISNmiMQwhkh7TOeO3P_idO82Uul2kgAAKH-zEb5BdhSJ8O28DitEoiAQADAgADeAADNgQ",
+        "AgACAgIAAxkBAAISNmiMQwhkh7TOeO3P_idO82Uul2kgAAKH-zEb5BdhSJ8O28DitEoiAQADAgADeQADNgQ",
+        "AgACAgIAAxkBAAISN2iMQwhVNiwhgC9C0SE0HnaIycuQAAJj-TEbjIRgSNwC0invTwEaAQADAgADcwADNgQ",
+        "AgACAgIAAxkBAAISN2iMQwhVNiwhgC9C0SE0HnaIycuQAAJj-TEbjIRgSNwC0invTwEaAQADAgADbQADNgQ",
+        "AgACAgIAAxkBAAISN2iMQwhVNiwhgC9C0SE0HnaIycuQAAJj-TEbjIRgSNwC0invTwEaAQADAgADeAADNgQ",
+        "AgACAgIAAxkBAAISN2iMQwhVNiwhgC9C0SE0HnaIycuQAAJj-TEbjIRgSNwC0invTwEaAQADAgADeQADNgQ"
+      ],
+      "documents": []
     }
   ]
 }
