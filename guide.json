@@ -159,17 +159,6 @@
         "AgACAgIAAxkBAAISN2iMQwhVNiwhgC9C0SE0HnaIycuQAAJj-TEbjIRgSNwC0invTwEaAQADAgADeQADNgQ",
         "AgACAgIAAxkBAAISOGiMQwjHU_GzmI9qvK74w1iXvvK8AAJk-TEbjIRgSAwF5Ni78WU3AQADAgADeQADNgQ"
       ]
-    },
-    {
-      "id": 29,
-      "question": "Тест док фото текст",
-      "answer": "текст ответ тест",
-      "photos": [
-        "AgACAgIAAxkBAAIU_miMh8n8TysItCtCzDELMenBKa91AAJN-TEb-pZgSPULH9MU0xudAQADAgADeQADNgQ"
-      ],
-      "documents": [
-        "BQACAgIAAxkBAAIU_2iMh8kQa1BlnQjSo_rlw5ILWekqAAK1cgACjIRoSBYtXii8GWnHNgQ"
-      ]
     }
   ]
 }

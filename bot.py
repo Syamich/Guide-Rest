@@ -455,8 +455,6 @@ def show_answer(update: Update, context: CallbackContext):
             valid_photo_ids = [pid for pid in photo_ids if isinstance(pid, str) and pid.strip()]
             if not valid_photo_ids:
                 logger.warning(f"Нет валидных file_id для {data_type} ID {question_id}: {photo_ids}")
-                message = query.message.reply_text(response, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]]))
-                message_ids.append(message.message_id)
             elif len(valid_photo_ids) == 1:
                 message = query.message.reply_photo(
                     photo=valid_photo_ids[0],
@@ -473,21 +471,23 @@ def show_answer(update: Update, context: CallbackContext):
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
                 )
                 message_ids.append(delete_message.message_id)
-        elif doc_ids:
-            message = query.message.reply_document(
-                document=doc_ids[0],
-                caption=response
-            )
-            message_ids.append(message.message_id)
-            for doc_id in doc_ids[1:]:
-                message = query.message.reply_document(document=doc_id)
+
+        if doc_ids:
+            for i, doc_id in enumerate(doc_ids):
+                message = query.message.reply_document(
+                    document=doc_id,
+                    caption=response if i == 0 and not photo_ids else None,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]]) if i == 0 and not photo_ids else None
+                )
                 message_ids.append(message.message_id)
-            delete_message = query.message.reply_text(
-                "Нажмите, чтобы удалить ответ:",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
-            )
-            message_ids.append(delete_message.message_id)
-        else:
+            if photo_ids and doc_ids:
+                delete_message = query.message.reply_text(
+                    "Нажмите, чтобы удалить ответ:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
+                )
+                message_ids.append(delete_message.message_id)
+
+        if not photo_ids and not doc_ids:
             message = query.message.reply_text(
                 response,
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
