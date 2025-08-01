@@ -427,6 +427,7 @@ def send_media_groups(query, media, text, max_media_per_album=MAX_MEDIA_PER_ALBU
     return message_ids
 
 @restrict_access
+@restrict_access
 def show_answer(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
@@ -458,7 +459,7 @@ def show_answer(update: Update, context: CallbackContext):
                 message = query.message.reply_photo(
                     photo=photo_ids[0],
                     caption=text,
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_answer_{question_id}')]])
                 )
                 message_ids.append(message.message_id)
             else:
@@ -466,7 +467,7 @@ def show_answer(update: Update, context: CallbackContext):
                 message_ids.extend(send_media_groups(query, media, text))
                 delete_message = query.message.reply_text(
                     "🗑 Удалить все фото",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_answer_{question_id}')]])
                 )
                 message_ids.append(delete_message.message_id)
         elif doc_ids:
@@ -483,18 +484,19 @@ def show_answer(update: Update, context: CallbackContext):
                     message_ids.append(message.message_id)
                 delete_message = query.message.reply_text(
                     "🗑 Удалить все документы",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_answer_{question_id}')]])
                 )
                 message_ids.append(delete_message.message_id)
             logger.info(f"Отправлено {len(doc_ids)} документов для {data_type} ID {question_id}")
         else:
             message = query.message.reply_text(
                 text,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_answer_{question_id}')]])
             )
             message_ids.append(message.message_id)
 
         context.user_data['answer_message_ids'] = message_ids
+        context.user_data['current_question_id'] = question_id
         context.job_queue.run_once(
             schedule_message_deletion,
             1800,
@@ -917,14 +919,16 @@ def check_album_timeout(context: CallbackContext):
             context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
             logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
             context.user_data['pending_photos'] = []
-        save_new_point(update, context, send_message=True)
+            update.message.reply_text(
+                f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                quote=False
+            )
+        context.user_data['album_processing'] = False
+        context.user_data['last_processed_media_group_id'] = None
         context.user_data['point_saved'] = True
         context.user_data['timeout_task'] = None
         logger.info(f"Пользователь {user_display} завершил add_{data_type}_conv в check_album_timeout")
-        context.user_data.clear()
-        context.user_data['conversation_state'] = f'{data_type.upper()}_ALBUM_SAVED'
-        context.user_data['conversation_active'] = False
-        return ConversationHandler.END
     return None
 
 # Сохранение нового пункта
@@ -996,6 +1000,8 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['last_processed_media_group_id'] = None
         if 'last_photo_time' not in context.user_data:
             context.user_data['last_photo_time'] = None
+        if 'album_processing' not in context.user_data:
+            context.user_data['album_processing'] = False
 
         media_group_id = update.message.media_group_id
         total_files = len(context.user_data['photos']) + len(context.user_data['documents'])
@@ -1018,18 +1024,23 @@ def receive_answer_files(update: Update, context: CallbackContext):
             return ConversationHandler.END
 
         if update.message.photo:
+            if context.user_data['album_processing'] and media_group_id == context.user_data['last_processed_media_group_id']:
+                # Пропускаем обработку, если альбом уже обрабатывается
+                logger.debug(f"Пользователь {user_display} продолжает отправку альбома {media_group_id}, пропускаем")
+                return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            context.user_data['album_processing'] = True
             # Сохраняем время получения фото
             context.user_data['last_photo_time'] = update.message.date
             new_photos = [photo.file_id for photo in update.message.photo if photo.file_id not in context.user_data['pending_photos']]
             context.user_data['pending_photos'].extend(new_photos)
             logger.debug(f"Пользователь {user_display} добавил в pending_photos: {new_photos}, media_group_id: {media_group_id}")
-            # Сохраняем подпись, если она есть
+            # Сохраняем подпись, если она есть и ответ еще не задан
             if update.message.caption and not context.user_data.get('answer'):
                 context.user_data['answer'] = update.message.caption
             # Планируем тайм-аут для обработки альбома
             if media_group_id and context.user_data['last_processed_media_group_id'] != media_group_id:
                 if context.user_data.get('timeout_task'):
-                    context.user_data['timeout_task'].remove()  # Изменено с cancel() на remove()
+                    context.user_data['timeout_task'].remove()
                     logger.debug(f"Удалена предыдущая задача таймаута для пользователя {user_display}")
                 context.user_data['timeout_task'] = context.job_queue.run_once(
                     check_album_timeout,
@@ -1039,16 +1050,17 @@ def receive_answer_files(update: Update, context: CallbackContext):
                 context.user_data['last_processed_media_group_id'] = media_group_id
                 logger.debug(f"Запланирован тайм-аут для альбома {media_group_id} для пользователя {user_display}")
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-            # Если это не альбом или альбом завершен
+            # Если это не альбом
             unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
             context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
             logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото в {data_type}: {unique_photos}")
             context.user_data['pending_photos'] = []
+            context.user_data['album_processing'] = False
             context.user_data['last_processed_media_group_id'] = None
             if context.user_data.get('timeout_task'):
-                context.user_data['timeout_task'].remove()  # Изменено с cancel() на remove()
+                context.user_data['timeout_task'].remove()
                 context.user_data['timeout_task'] = None
-                logger.debug(f"Удалена задача таймаута после обработки альбома для пользователя {user_display}")
+                logger.debug(f"Удалена задача таймаута после обработки фото для пользователя {user_display}")
             update.message.reply_text(
                 f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
                 reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
@@ -1130,7 +1142,16 @@ def delete_message(update: Update, context: CallbackContext):
     query.answer()
     try:
         user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-        if query.data == 'delete_answer':
+        if query.data.startswith('delete_answer_'):
+            question_id = int(query.data.split('_')[-1])
+            if context.user_data.get('current_question_id') != question_id:
+                logger.warning(f"Пользователь {user_display} попытался удалить сообщения для неправильного question_id: {question_id}")
+                query.message.reply_text(
+                    "❌ Сообщения для удаления не соответствуют текущему пункту!",
+                    reply_markup=MAIN_MENU,
+                    quote=False
+                )
+                return
             message_ids = context.user_data.get('answer_message_ids', [])
             if not message_ids:
                 logger.warning(f"Пользователь {user_display} попытался удалить сообщения, но answer_message_ids пуст")
@@ -1150,6 +1171,7 @@ def delete_message(update: Update, context: CallbackContext):
                 except Exception as e:
                     logger.debug(f"Не удалось удалить сообщение {message_id} в чате {chat_id}: {str(e)}")
             context.user_data['answer_message_ids'] = []
+            context.user_data['current_question_id'] = None
             query.message.reply_text(
                 f"🗑 Удалено {deleted_count} сообщений!",
                 reply_markup=MAIN_MENU,
