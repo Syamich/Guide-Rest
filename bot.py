@@ -1028,7 +1028,7 @@ def receive_answer_files(update: Update, context: CallbackContext):
                 logger.debug(f"Пользователь {user_display} продолжает отправку альбома {media_group_id}, пропускаем")
                 return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
             context.user_data['album_processing'] = True
-            # Берем только последнюю версию фото (наибольшее разрешение)
+            # Берем последнюю версию фото (наибольшее разрешение) из текущего сообщения
             new_photo = update.message.photo[-1].file_id
             if new_photo not in context.user_data['pending_photos']:
                 context.user_data['pending_photos'].append(new_photo)
@@ -1098,9 +1098,9 @@ def receive_answer_files(update: Update, context: CallbackContext):
                     quote=False
                 )
         elif update.message.text == "Готово":
-            if not (context.user_data.get('photos') or context.user_data.get('documents') or context.user_data.get('answer')):
+            if not (context.user_data.get('photos') or context.user_data.get('documents')):
                 update.message.reply_text(
-                    "❌ Отправьте хотя бы один файл или текст перед завершением!",
+                    "❌ Отправьте хотя бы один файл перед завершением!",
                     reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                     quote=False
                 )
@@ -1196,6 +1196,7 @@ def delete_message(update: Update, context: CallbackContext):
 
 # Обработка фотографий для ответа
 @restrict_access
+@restrict_access
 def receive_answer(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
         logger.warning(f"Пользователь {update.effective_user.id} попытался отправить ответ без активного диалога или вопроса")
@@ -1223,9 +1224,9 @@ def receive_answer(update: Update, context: CallbackContext):
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
 
     if update.message.text == "Готово":
-        if not (context.user_data.get('answer') or context.user_data.get('photos') or context.user_data.get('documents')):
+        if not (context.user_data.get('photos') or context.user_data.get('documents')):
             update.message.reply_text(
-                "❌ Отправьте хотя бы один файл или текст перед завершением!",
+                "❌ Отправьте хотя бы один файл перед завершением!",
                 reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                 quote=False
             )
