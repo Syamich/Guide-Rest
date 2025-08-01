@@ -463,29 +463,32 @@ def show_answer(update: Update, context: CallbackContext):
                 message_ids.append(message.message_id)
             else:
                 media = [InputMediaPhoto(media=pid) for pid in photo_ids]
-                message_ids.extend(send_media_groups(query, media, text))
-                delete_message = query.message.reply_text(
-                    "🗑 Удалить все фото",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_answer_{question_id}')]])
+                messages = context.bot.send_media_group(
+                    chat_id=query.message.chat_id,
+                    media=media
                 )
-                message_ids.append(delete_message.message_id)
-        elif doc_ids:
-            if len(doc_ids) >= 1:
-                message = query.message.reply_document(
-                    document=doc_ids[0],
-                    caption=text
+                message_ids.extend([msg.message_id for msg in messages])
+                message = query.message.reply_text(
+                    text,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_answer_{question_id}')]])
                 )
                 message_ids.append(message.message_id)
-                for doc_id in doc_ids[1:]:
-                    message = query.message.reply_document(
-                        document=doc_id
-                    )
-                    message_ids.append(message.message_id)
-                delete_message = query.message.reply_text(
-                    "🗑 Удалить все документы",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_answer_{question_id}')]])
+        elif doc_ids:
+            message = query.message.reply_document(
+                document=doc_ids[0],
+                caption=text
+            )
+            message_ids.append(message.message_id)
+            for doc_id in doc_ids[1:]:
+                message = query.message.reply_document(
+                    document=doc_id
                 )
-                message_ids.append(delete_message.message_id)
+                message_ids.append(message.message_id)
+            delete_message = query.message.reply_text(
+                "🗑 Удалить все документы",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data=f'delete_answer_{question_id}')]])
+            )
+            message_ids.append(delete_message.message_id)
             logger.info(f"Отправлено {len(doc_ids)} документов для {data_type} ID {question_id}")
         else:
             message = query.message.reply_text(
@@ -496,7 +499,7 @@ def show_answer(update: Update, context: CallbackContext):
 
         context.user_data['answer_message_ids'] = message_ids
         context.user_data['current_question_id'] = question_id
-        logger.debug(f"Сохранены message_ids: {message_ids} для question_id: {question_id}")
+        logger.debug(f"Сохранены message_ids: {message_ids} для question_id: {question_id} для пользователя {user_display}")
         context.job_queue.run_once(
             schedule_message_deletion,
             1800,
@@ -901,32 +904,31 @@ def receive_answer(update: Update, context: CallbackContext):
 # Проверка таймаута альбома
 def check_album_timeout(context: CallbackContext):
     update, context = context.job.context
-    if context.user_data.get('last_photo_time') == update.message.date:
-        data_type = context.user_data.get('data_type', 'guide')
-        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-        logger.info(f"Пользователь {user_display} завершил альбом для {data_type} media group {context.user_data.get('last_processed_media_group_id')}")
-        if context.user_data.get('loading_message_id'):
-            try:
-                context.bot.delete_message(
-                    chat_id=update.effective_chat.id,
-                    message_id=context.user_data['loading_message_id']
-                )
-                logger.info(f"Пользователь {user_display} удалил сообщение о загрузке")
-            except Exception as e:
-                logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
-        if context.user_data.get('pending_photos'):
-            unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
-            context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
-            logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
-            context.user_data['pending_photos'] = []
-            update.message.reply_text(
-                f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
-                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-                quote=False
+    data_type = context.user_data.get('data_type', 'guide')
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} завершил альбом для {data_type} media group")
+    if context.user_data.get('loading_message_id'):
+        try:
+            context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=context.user_data['loading_message_id']
             )
-        context.user_data['last_processed_media_group_id'] = None
-        context.user_data['timeout_task'] = None
-        logger.info(f"Пользователь {user_display} завершил обработку альбома в check_album_timeout")
+            logger.info(f"Пользователь {user_display} удалил сообщение о загрузке")
+        except Exception as e:
+            logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
+    if context.user_data.get('pending_photos'):
+        unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+        context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+        logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
+        context.user_data['pending_photos'] = []
+        update.message.reply_text(
+            f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+            reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+            quote=False
+        )
+    context.user_data['last_photo_time'] = None
+    context.user_data['timeout_task'] = None
+    logger.info(f"Пользователь {user_display} завершил обработку альбома в check_album_timeout")
     return None
 
 # Сохранение нового пункта
@@ -994,8 +996,6 @@ def receive_answer_files(update: Update, context: CallbackContext):
             context.user_data['documents'] = []
         if 'pending_photos' not in context.user_data:
             context.user_data['pending_photos'] = []
-        if 'last_processed_media_group_id' not in context.user_data:
-            context.user_data['last_processed_media_group_id'] = None
         if 'last_photo_time' not in context.user_data:
             context.user_data['last_photo_time'] = None
 
@@ -1004,7 +1004,7 @@ def receive_answer_files(update: Update, context: CallbackContext):
 
         if total_files >= MAX_MEDIA_PER_ALBUM:
             update.message.reply_text(
-                f"❌ Максимум {MAX_MEDIA_PER_ALBUM} файлов (фото или документы) на пункт! Сохраняем текущие файлы.",
+                f"❌ Максимум {MAX_MEDIA_PER_ALBUM} файлов (фото или документы) на пункт! Отправьте ещё файлы, текст или нажмите 'Готово':",
                 reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                 quote=False
             )
@@ -1013,11 +1013,7 @@ def receive_answer_files(update: Update, context: CallbackContext):
                 context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
                 logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
                 context.user_data['pending_photos'] = []
-            save_new_point(update, context, send_message=True)
-            context.user_data.clear()
-            context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
-            context.user_data['conversation_active'] = False
-            return ConversationHandler.END
+            return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
 
         if update.message.photo:
             # Берем последнюю версию фото (наибольшее разрешение)
@@ -1029,18 +1025,28 @@ def receive_answer_files(update: Update, context: CallbackContext):
             if update.message.caption and not context.user_data.get('answer'):
                 context.user_data['answer'] = update.message.caption
             # Планируем тайм-аут для обработки альбома
-            if media_group_id and context.user_data['last_processed_media_group_id'] != media_group_id:
+            if media_group_id:
                 if context.user_data.get('timeout_task'):
                     context.user_data['timeout_task'].remove()
                     logger.debug(f"Удалена предыдущая задача таймаута для пользователя {user_display}")
+                context.user_data['last_photo_time'] = update.message.date
                 context.user_data['timeout_task'] = context.job_queue.run_once(
                     check_album_timeout,
-                    2,  # Ждем 2 секунды для завершения альбома
+                    5,  # Увеличен таймаут до 5 секунд
                     context=(update, context)
                 )
-                context.user_data['last_processed_media_group_id'] = media_group_id
                 logger.debug(f"Запланирован тайм-аут для альбома {media_group_id} для пользователя {user_display}")
-            # Возвращаемся, чтобы дождаться завершения альбома
+            else:
+                # Если это не альбом, сразу переносим фото
+                unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
+                context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
+                logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото в {data_type}: {unique_photos}")
+                context.user_data['pending_photos'] = []
+                update.message.reply_text(
+                    f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                    quote=False
+                )
             return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         elif update.message.document:
             doc = update.message.document
