@@ -15,6 +15,9 @@ from telegram.ext import (
     Filters,
     CallbackContext,
 )
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime, timedelta, timezone
+from collections import defaultdict
 
 # Максимальная длина текста кнопки (в символах) для выравнивания
 MAX_BUTTON_TEXT_LENGTH = 100
@@ -165,16 +168,35 @@ def error_handler(update: Update, context: CallbackContext):
         )
     return ConversationHandler.END
 
+
 # Команда /start
 @restrict_access
 def start(update: Update, context: CallbackContext):
-    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-    logger.info(f"Пользователь {user_display} запустил бот")
+    user = update.effective_user
+    user_display = context.user_data.get('user_display', f"ID {user.id}")
+    logger.info(f"Пользователь {user_display} запустил бота")
+    context.user_data['user_display'] = user_display
+    if 'user_actions' not in context.bot_data:
+        context.bot_data['user_actions'] = []
+    context.bot_data['user_actions'].append({
+        'user_id': user.id,
+        'username': user.username or f"ID {user.id}",
+        'action': 'start',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': 'Пользователь запустил бота'
+    })
+    try:
+        update.message.delete()
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение /start от {user_display}: {e}")
+    context.job_queue.run_once(
+        lambda ctx: clear_chat(ctx, update.effective_chat.id, update.effective_message.message_id, user_display),
+        0,
+        context=None
+    )
     context.user_data.clear()
-    context.user_data['conversation_state'] = 'START'
-    context.user_data['conversation_active'] = False
     update.message.reply_text(
-        "Добро пожаловать в справочник техподдержки РЭСТ! 📋\nВыберите действие:",
+        "👋 Добро пожаловать в справочник-бот! Используйте меню для навигации.",
         reply_markup=MAIN_MENU
     )
     return ConversationHandler.END
@@ -202,16 +224,23 @@ def cancel(update: Update, context: CallbackContext):
 def open_guide(update: Update, context: CallbackContext):
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
     logger.info(f"Пользователь {user_display} открыл справочник")
+    # Запись действия с никнеймом
+    if 'user_actions' not in context.bot_data:
+        context.bot_data['user_actions'] = []
+    context.bot_data['user_actions'].append({
+        'user_id': update.effective_user.id,
+        'username': update.effective_user.username or f"ID {update.effective_user.id}",  # Сохраняем никнейм или ID
+        'action': 'open_guide',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': 'Пользователь открыл справочник'
+    })
+    # Остальной код без изменений
     try:
-        # Удаляем сообщение пользователя
         update.message.delete()
     except Exception as e:
         logger.debug(f"Не удалось удалить сообщение пользователя {user_display}: {e}")
-    # Запускаем фоновую очистку чата
-    chat_id = update.effective_chat.id
-    message_id = update.effective_message.message_id
     context.job_queue.run_once(
-        lambda ctx: clear_chat(ctx, chat_id, message_id, user_display),
+        lambda ctx: clear_chat(ctx, update.effective_chat.id, update.effective_message.message_id, user_display),
         0,
         context=None
     )
@@ -227,7 +256,6 @@ def open_guide(update: Update, context: CallbackContext):
         )
         return ConversationHandler.END
     page = context.user_data.get('page', 0)
-    # Отображаем справочник сразу
     display_guide_page(update, context, guide, page, 'guide')
     return ConversationHandler.END
 
@@ -236,16 +264,21 @@ def open_guide(update: Update, context: CallbackContext):
 def open_templates(update: Update, context: CallbackContext):
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
     logger.info(f"Пользователь {user_display} открыл шаблоны")
+    # Запись действия с никнеймом
+    context.bot_data['user_actions'].append({
+        'user_id': update.effective_user.id,
+        'username': update.effective_user.username or f"ID {update.effective_user.id}",
+        'action': 'open_templates',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': 'Пользователь открыл шаблоны'
+    })
+    # Остальной код без изменений
     try:
-        # Удаляем сообщение пользователя
         update.message.delete()
     except Exception as e:
         logger.debug(f"Не удалось удалить сообщение пользователя {user_display}: {e}")
-    # Запускаем фоновую очистку чата
-    chat_id = update.effective_chat.id
-    message_id = update.effective_message.message_id
     context.job_queue.run_once(
-        lambda ctx: clear_chat(ctx, chat_id, message_id, user_display),
+        lambda ctx: clear_chat(ctx, update.effective_chat.id, update.effective_message.message_id, user_display),
         0,
         context=None
     )
@@ -266,7 +299,6 @@ def open_templates(update: Update, context: CallbackContext):
         )
         return ConversationHandler.END
     page = context.user_data.get('page', 0)
-    # Отображаем шаблоны сразу
     display_template_page(update, context, templates, page)
     return ConversationHandler.END
 
@@ -435,6 +467,15 @@ def show_answer(update: Update, context: CallbackContext):
         question_id = int(question_id)
         user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
         logger.info(f"Пользователь {user_display} запросил ответ для {data_type} ID {question_id}")
+        # Запись действия с никнеймом
+        context.bot_data['user_actions'].append({
+            'user_id': update.effective_user.id,
+            'username': update.effective_user.username or f"ID {update.effective_user.id}",  # Сохраняем никнейм или ID
+            'action': 'show_answer',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'details': f"Пользователь открыл пункт {data_type} ID {question_id}"
+        })
+        # Остальной код без изменений
         data = load_data(data_type)
         key = 'questions' if data_type == 'guide' else 'templates'
         item = next((q for q in data[key] if q["id"] == question_id), None)
@@ -450,7 +491,6 @@ def show_answer(update: Update, context: CallbackContext):
         photo_ids = item.get('photos', []) or ([item['photo']] if item.get('photo') else [])
         doc_ids = item.get('documents', [])
         message_ids = []
-
         if ENABLE_PHOTOS and photo_ids:
             valid_photo_ids = [pid for pid in photo_ids if isinstance(pid, str) and pid.strip()]
             if not valid_photo_ids:
@@ -471,7 +511,6 @@ def show_answer(update: Update, context: CallbackContext):
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
                 )
                 message_ids.append(delete_message.message_id)
-
         if doc_ids:
             for i, doc_id in enumerate(doc_ids):
                 message = query.message.reply_document(
@@ -486,14 +525,12 @@ def show_answer(update: Update, context: CallbackContext):
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
                 )
                 message_ids.append(delete_message.message_id)
-
         if not photo_ids and not doc_ids:
             message = query.message.reply_text(
                 response,
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Удалить", callback_data='delete_answer')]])
             )
             message_ids.append(message.message_id)
-
         context.user_data['answer_message_ids'] = message_ids
         context.user_data['current_question_id'] = question_id
         logger.debug(f"Сохранены message_ids: {message_ids} для question_id: {question_id} для пользователя {user_display}")
@@ -580,6 +617,15 @@ def perform_search(update: Update, context: CallbackContext):
         keyword = update.message.text.lower().strip()
         user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
         logger.info(f"Пользователь {user_display} выполнил поиск по ключевому слову '{keyword}'")
+        # Запись действия с никнеймом
+        context.bot_data['user_actions'].append({
+            'user_id': update.effective_user.id,
+            'username': update.effective_user.username or f"ID {update.effective_user.id}",
+            'action': 'perform_search',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'details': f"Пользователь выполнил поиск по ключевому слову '{keyword}'"
+        })
+        # Остальной код без изменений
         guide = load_guide()
         if not isinstance(guide, dict) or "questions" not in guide or not isinstance(guide["questions"], list):
             logger.error("Неверная структура guide.json")
@@ -588,24 +634,19 @@ def perform_search(update: Update, context: CallbackContext):
                 reply_markup=MAIN_MENU
             )
             return
-        # Инициализация морфологического анализатора
         morph = pymorphy3.MorphAnalyzer()
-        # Нормализация ключевого слова
         keyword_normalized = morph.parse(keyword)[0].normal_form
         logger.debug(f"Нормализованное ключевое слово: '{keyword_normalized}'")
         results = []
         for q in guide["questions"]:
             if not (isinstance(q, dict) and "question" in q and isinstance(q["question"], str)):
                 continue
-            # Нормализация слов в вопросе
             question_words = [morph.parse(word)[0].normal_form for word in q["question"].lower().split()]
-            # Нормализация слов в ответе, если он существует
             answer_words = (
                 [morph.parse(word)[0].normal_form for word in q["answer"].lower().split()]
                 if q.get("answer") and isinstance(q["answer"], str)
                 else []
             )
-            # Проверка наличия нормализованного ключевого слова
             if keyword_normalized in question_words or keyword_normalized in answer_words:
                 results.append(q)
         if not results:
@@ -620,7 +661,7 @@ def perform_search(update: Update, context: CallbackContext):
         context.user_data['data_type'] = 'guide'
         context.user_data['conversation_state'] = 'SEARCH'
         context.user_data['conversation_active'] = False
-        context.user_data['search_query'] = keyword  # Сохраняем оригинальный запрос
+        context.user_data['search_query'] = keyword
         logger.debug(f"Найдено {len(results)} пунктов для запроса '{keyword}': {[item['id'] for item in results]}")
         display_guide_page(update, context, {"questions": results}, 0, 'guide')
         return
@@ -639,7 +680,19 @@ def perform_search(update: Update, context: CallbackContext):
 # Добавление пункта в справочник
 @restrict_access
 def add_point(update: Update, context: CallbackContext):
-    logger.info(f"Пользователь {update.effective_user.id} начал добавление нового пункта справочника")
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} начал добавление нового пункта справочника")
+    # Запись действия с никнеймом
+    if 'user_actions' not in context.bot_data:
+        context.bot_data['user_actions'] = []
+    context.bot_data['user_actions'].append({
+        'user_id': update.effective_user.id,
+        'username': update.effective_user.username or f"ID {update.effective_user.id}",
+        'action': 'add_point',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': 'Пользователь начал добавление пункта в справочник'
+    })
+    # Остальной код без изменений
     context.user_data.clear()
     context.user_data['photos'] = []
     context.user_data['media_group_id'] = None
@@ -656,10 +709,10 @@ def add_point(update: Update, context: CallbackContext):
             reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
             quote=False
         )
-        logger.info(f"Пользователь {update.effective_user.id} успешно запустил add_point")
+        logger.info(f"Пользователь {user_display} успешно запустил add_point")
         return GUIDE_QUESTION
     except Exception as e:
-        logger.error(f"Ошибка в add_point для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        logger.error(f"Ошибка в add_point для пользователя {user_display}: {e}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
@@ -759,20 +812,22 @@ def receive_question(update: Update, context: CallbackContext):
 
 # Обработка ответа
 @restrict_access
-def receive_answer_photos(update: Update, context: CallbackContext):
+def receive_answer(update: Update, context: CallbackContext):
     if not context.user_data.get('conversation_active', False) or 'new_question' not in context.user_data:
-        logger.warning(f"Пользователь {update.effective_user.id} попытался отправить фото без активного диалога или вопроса")
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.warning(f"Пользователь {user_display} попытался отправить ответ без активного диалога или вопроса")
         update.message.reply_text(
             f"❌ Пожалуйста, начните добавление {'пункта' if context.user_data.get('data_type') == 'guide' else 'шаблона'} заново.",
             reply_markup=MAIN_MENU,
             quote=False
         )
         context.user_data.clear()
-        context.user_data['conversation_state'] = 'INVALID_PHOTOS'
+        context.user_data['conversation_state'] = 'INVALID_ANSWER'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
     data_type = context.user_data.get('data_type', 'guide')
     if data_type not in ['guide', 'template']:
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
         logger.error(f"Недопустимый data_type: {data_type}")
         update.message.reply_text(
             "❌ Ошибка: Неверный тип данных. Начните заново.",
@@ -783,68 +838,59 @@ def receive_answer_photos(update: Update, context: CallbackContext):
         context.user_data['conversation_state'] = 'INVALID_DATA_TYPE'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
+    if 'photos' not in context.user_data:
+        context.user_data['photos'] = []
+    if 'documents' not in context.user_data:
+        context.user_data['documents'] = []
+    if 'pending_photos' not in context.user_data:
+        context.user_data['pending_photos'] = []
     user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
-    total_files = len(context.user_data.get('photos', [])) + len(context.user_data.get('documents', []))
 
-    if total_files >= MAX_MEDIA_PER_ALBUM:
-        update.message.reply_text(
-            f"❌ Максимум {MAX_MEDIA_PER_ALBUM} файлов (фото или документы) на пункт! Отправьте ещё файлы, текст или нажмите 'Готово':",
-            reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-            quote=False
-        )
+    if update.message.text == "Готово":
         if context.user_data.get('pending_photos'):
             unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
             context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
             logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
             context.user_data['pending_photos'] = []
-        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
-
-    if update.message.photo:
-        if update.message.media_group_id == context.user_data.get('media_group_id'):
-            new_photo = update.message.photo[-1].file_id
-            if new_photo not in context.user_data['pending_photos']:
-                context.user_data['pending_photos'].append(new_photo)
-                context.user_data['last_photo_time'] = update.message.date
-                logger.info(f"Пользователь {user_display} добавил фото в альбом {data_type} media group {update.message.media_group_id}: {new_photo}")
+        save_new_point(update, context, send_message=True)
+        # Запись действия с никнеймом
+        context.bot_data['user_actions'].append({
+            'user_id': update.effective_user.id,
+            'username': update.effective_user.username or f"ID {update.effective_user.id}",
+            'action': 'save_point',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'details': f"Пользователь сохранил пункт в {data_type}: {context.user_data.get('new_question', 'Без вопроса')}"
+        })
+        context.user_data.clear()
+        context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
+        context.user_data['conversation_active'] = False
+        return ConversationHandler.END
+    # Остальной код без изменений
+    elif update.message.photo:
+        if update.message.media_group_id:
+            context.user_data['media_group_id'] = update.message.media_group_id
+            context.user_data['pending_photos'].append(update.message.photo[-1].file_id)
+            context.user_data['last_photo_time'] = update.message.date
+            logger.info(f"Пользователь {user_display} добавил фото в альбом {data_type} media group {update.message.media_group_id}: {update.message.photo[-1].file_id}")
+            if len(context.user_data['pending_photos']) == 1:
+                loading_message = update.message.reply_text("⏳ Загрузка...", quote=False)
+                context.user_data['loading_message_id'] = loading_message.message_id
                 if not context.user_data.get('timeout_task'):
                     context.user_data['timeout_task'] = context.job_queue.run_once(
                         check_album_timeout, 7, context=(update, context)
                     )
             return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
         else:
-            if context.user_data.get('pending_photos'):
-                unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
-                context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
-                logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
-                context.user_data['pending_photos'] = []
-                if context.user_data.get('timeout_task'):
-                    context.user_data['timeout_task'].cancel()
-                    context.user_data['timeout_task'] = None
-                    logger.info(f"Пользователь {user_display} отменил задачу таймаута в receive_answer_photos")
-                if context.user_data.get('loading_message_id'):
-                    try:
-                        context.bot.delete_message(
-                            chat_id=update.effective_chat.id,
-                            message_id=context.user_data['loading_message_id']
-                        )
-                        logger.info(f"Пользователь {user_display} удалил сообщение о загрузке")
-                    except Exception as e:
-                        logger.error(f"Не удалось удалить сообщение о загрузке: {e}")
-                update.message.reply_text(
-                    f"✅ Фото добавлены ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
-                    reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
-                    quote=False
-                )
-            new_photo = update.message.photo[-1].file_id
-            context.user_data['pending_photos'] = [new_photo]
-            context.user_data['media_group_id'] = update.message.media_group_id
-            context.user_data['last_photo_time'] = update.message.date
-            logger.info(f"Пользователь {user_display} начал новый альбом {data_type} media group {update.message.media_group_id}: {new_photo}")
-            if not context.user_data.get('timeout_task'):
-                context.user_data['timeout_task'] = context.job_queue.run_once(
-                    check_album_timeout, 7, context=(update, context)
-                )
-            return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
+            context.user_data['photos'] = [update.message.photo[-1].file_id]
+            logger.info(f"Пользователь {user_display} добавил одно фото в {data_type}: {context.user_data['photos']}")
+            update.message.reply_text(
+                f"✅ Фото добавлено ({len(context.user_data['photos'])}). Отправьте ещё файлы, текст или нажмите 'Готово':",
+                reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
+                quote=False
+            )
+        if update.message.caption and not context.user_data.get('answer'):
+            context.user_data['answer'] = update.message.caption
+        return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
     elif update.message.document:
         doc = update.message.document
         if doc.mime_type not in [
@@ -877,20 +923,10 @@ def receive_answer_photos(update: Update, context: CallbackContext):
                 reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
                 quote=False
             )
-    elif update.message.text == "Готово":
-        if context.user_data.get('pending_photos'):
-            unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
-            context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
-            logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
-            context.user_data['pending_photos'] = []
-        save_new_point(update, context, send_message=True)
-        context.user_data.clear()
-        context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
-        context.user_data['conversation_active'] = False
-        return ConversationHandler.END
     else:
+        context.user_data['answer'] = update.message.text
         update.message.reply_text(
-            "❌ Пожалуйста, отправьте фото или документ (.doc, .docx, .pdf, .xls, .xlsx)!",
+            f"✅ Ответ сохранён. Отправьте ещё файлы или нажмите 'Готово':",
             reply_markup=ReplyKeyboardMarkup([["Готово"], ["/cancel"]], resize_keyboard=True),
             quote=False
         )
@@ -987,15 +1023,12 @@ def receive_answer_files(update: Update, context: CallbackContext):
             return GUIDE_ANSWER_PHOTOS if data_type == 'guide' else TEMPLATE_ANSWER_PHOTOS
 
         if update.message.photo:
-            # Берем последнюю версию фото (наибольшее разрешение)
             new_photo = update.message.photo[-1].file_id
             if new_photo not in context.user_data['pending_photos']:
                 context.user_data['pending_photos'].append(new_photo)
             logger.debug(f"Пользователь {user_display} добавил в pending_photos: {new_photo}, media_group_id: {media_group_id}")
-            # Сохраняем подпись, если она есть и ответ еще не задан
             if update.message.caption and not context.user_data.get('answer'):
                 context.user_data['answer'] = update.message.caption
-            # Планируем тайм-аут для обработки альбома
             if media_group_id:
                 if context.user_data.get('timeout_task'):
                     context.user_data['timeout_task'].remove()
@@ -1003,12 +1036,11 @@ def receive_answer_files(update: Update, context: CallbackContext):
                 context.user_data['last_photo_time'] = update.message.date
                 context.user_data['timeout_task'] = context.job_queue.run_once(
                     check_album_timeout,
-                    5,  # Увеличен таймаут до 5 секунд
+                    5,
                     context=(update, context)
                 )
                 logger.debug(f"Запланирован тайм-аут для альбома {media_group_id} для пользователя {user_display}")
             else:
-                # Если это не альбом, сразу переносим фото
                 unique_photos = list(dict.fromkeys(context.user_data['pending_photos']))
                 context.user_data['photos'].extend([pid for pid in unique_photos if pid not in context.user_data['photos']])
                 logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото в {data_type}: {unique_photos}")
@@ -1068,6 +1100,14 @@ def receive_answer_files(update: Update, context: CallbackContext):
                 logger.info(f"Пользователь {user_display} добавил {len(unique_photos)} новых фото из pending_photos в {data_type}: {unique_photos}")
                 context.user_data['pending_photos'] = []
             save_new_point(update, context, send_message=True)
+            # Запись действия с никнеймом
+            context.bot_data['user_actions'].append({
+                'user_id': update.effective_user.id,
+                'username': update.effective_user.username or f"ID {update.effective_user.id}",
+                'action': 'save_point',
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'details': f"Пользователь сохранил пункт в {data_type}: {context.user_data.get('new_question', 'Без вопроса')}"
+            })
             context.user_data.clear()
             context.user_data['conversation_state'] = f'{data_type.upper()}_FILES_SAVED'
             context.user_data['conversation_active'] = False
@@ -1264,7 +1304,17 @@ def receive_answer(update: Update, context: CallbackContext):
 # Редактирование пункта справочника
 @restrict_access
 def edit_point(update: Update, context: CallbackContext):
-    logger.info(f"Пользователь {update.effective_user.id} начал редактирование пункта справочника")
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} начал редактирование пункта справочника")
+    # Запись действия с никнеймом
+    context.bot_data['user_actions'].append({
+        'user_id': update.effective_user.id,
+        'username': update.effective_user.username or f"ID {update.effective_user.id}",
+        'action': 'edit_point',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': 'Пользователь начал редактирование пункта справочника'
+    })
+    # Остальной код без изменений
     context.user_data.clear()
     context.user_data['conversation_state'] = 'EDIT_GUIDE'
     context.user_data['conversation_active'] = True
@@ -1284,7 +1334,7 @@ def edit_point(update: Update, context: CallbackContext):
         display_guide_edit_page(update, context, guide, 0)
         return GUIDE_EDIT_QUESTION
     except Exception as e:
-        logger.error(f"Ошибка в edit_point для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        logger.error(f"Ошибка в edit_point для пользователя {user_display}: {e}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
@@ -1683,6 +1733,14 @@ def receive_edit_value(update: Update, context: CallbackContext):
             quote=False
         )
         logger.info(f"Пользователь {user_display} изменил {field} для {data_type} ID {question_id}")
+        # Запись действия с никнеймом
+        context.bot_data['user_actions'].append({
+            'user_id': update.effective_user.id,
+            'username': update.effective_user.username or f"ID {update.effective_user.id}",
+            'action': 'edit_value',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'details': f"Пользователь изменил {field} для {data_type} ID {question_id}"
+        })
         context.user_data.clear()
         context.user_data['conversation_state'] = f'{data_type.upper()}_EDITED'
         context.user_data['conversation_active'] = False
@@ -1720,6 +1778,28 @@ def main():
     dp = updater.dispatcher
     dp.add_error_handler(error_handler)
 
+    # Инициализация структуры для статистики
+    if 'user_actions' not in dp.bot_data:
+        dp.bot_data['user_actions'] = []
+        logger.info("Инициализирована структура user_actions в bot_data")
+    else:
+        # Очистка записей без username
+        old_count = len(dp.bot_data['user_actions'])
+        dp.bot_data['user_actions'] = [action for action in dp.bot_data['user_actions'] if 'username' in action]
+        logger.info(f"Очищены старые записи user_actions, удалено {old_count - len(dp.bot_data['user_actions'])} записей, осталось {len(dp.bot_data['user_actions'])}")
+
+    # Настройка планировщика
+    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler.add_job(
+        send_usage_stats,
+        'interval',
+        hours=6,
+        next_run_time=datetime.now(timezone.utc),
+        args=[dp]
+    )
+    scheduler.start()
+    logger.info("Планировщик запущен для отправки статистики каждые 6 часов")
+
     # Регистрация ConversationHandler'ов
     guide_add_conv = ConversationHandler(
         entry_points=[MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point)],
@@ -1733,7 +1813,7 @@ def main():
                 MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
             GUIDE_ANSWER_PHOTOS: [
-                MessageHandler(Filters.photo | Filters.document, receive_answer_photos) if ENABLE_PHOTOS else None,
+                MessageHandler(Filters.photo | Filters.document, receive_answer_files) if ENABLE_PHOTOS else None,
                 MessageHandler(Filters.text & ~Filters.command, receive_answer),
                 MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
@@ -1756,7 +1836,7 @@ def main():
                 MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
             TEMPLATE_ANSWER_PHOTOS: [
-                MessageHandler(Filters.photo | Filters.document, receive_answer_photos) if ENABLE_PHOTOS else None,
+                MessageHandler(Filters.photo | Filters.document, receive_answer_files) if ENABLE_PHOTOS else None,
                 MessageHandler(Filters.text & ~Filters.command, receive_answer),
                 MessageHandler(~(Filters.text | Filters.photo | Filters.document) & ~Filters.command, handle_invalid_input),
             ],
@@ -1813,7 +1893,6 @@ def main():
         allow_reentry=False,
     )
 
-    # Регистрация обработчиков
     dp.add_handler(guide_add_conv)
     dp.add_handler(template_add_conv)
     dp.add_handler(guide_edit_conv)
@@ -1821,6 +1900,7 @@ def main():
 
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("cancel", cancel))
+    dp.add_handler(CommandHandler("stats", stats_command))
     dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
     dp.add_handler(MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), open_templates))
     dp.add_handler(MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point))
@@ -1873,6 +1953,88 @@ def schedule_message_deletion(context: CallbackContext):
     except Exception as e:
         logger.error(f"Ошибка при автоматическом удалении сообщения для пользователя {user_display}: {e}", exc_info=True)
 
+
+def send_usage_stats(context: CallbackContext):
+    try:
+        actions = context.bot_data.get('user_actions', [])
+        if not actions:
+            context.bot.send_message(
+                chat_id=1250098712,
+                text="📊 Статистика за последние 6 часов: нет активности.",
+                parse_mode=None
+            )
+            logger.info("Статистика за последние 6 часов отсутствует")
+            return
+
+        # Фильтрация действий за последние 6 часов
+        six_hours_ago = datetime.now(timezone.utc).timestamp() - 6 * 3600
+        recent_actions = [action for action in actions if datetime.fromisoformat(action['timestamp']).timestamp() >= six_hours_ago]
+
+        if not recent_actions:
+            context.bot.send_message(
+                chat_id=1250098712,
+                text="📊 Статистика за последние 6 часов: нет активности.",
+                parse_mode=None
+            )
+            logger.info("Статистика за последние 6 часов отсутствует")
+            return
+
+        # Подсчёт статистики
+        action_counts = defaultdict(int)
+        user_counts = defaultdict(int)
+        for action in recent_actions:
+            action_counts[action['action']] += 1
+            username = action.get('username', f"ID {action['user_id']}")  # Используем username или ID
+            user_counts[username] += 1
+
+        # Формирование отчёта
+        report = ["📊 Статистика за последние 6 часов:"]
+        report.append(f"Всего действий: {len(recent_actions)}")
+        report.append(f"Уникальных пользователей: {len(user_counts)}")
+        report.append("Действия по типам:")
+        for action, count in action_counts.items():
+            report.append(f"- {action}: {count}")
+        report.append("Действия по пользователям:")
+        for username, count in user_counts.items():
+            report.append(f"- {username}: {count}")
+        report.append("Подробности:")
+        for action in recent_actions:
+            username = action.get('username', f"ID {action['user_id']}")
+            report.append(f"- [{action['timestamp']}] {username}: {action['details']}")
+
+        # Отправка отчёта
+        context.bot.send_message(
+            chat_id=1250098712,
+            text="\n".join(report),
+            parse_mode=None
+        )
+        logger.info(f"Статистика отправлена пользователю 1250098712")
+
+        # Очистка старых записей
+        context.bot_data['user_actions'] = [action for action in actions if datetime.fromisoformat(action['timestamp']).timestamp() >= six_hours_ago]
+        logger.info(f"Статистика очищена, осталось {len(context.bot_data['user_actions'])} записей")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке статистики пользователю 1250098712: {str(e)}", exc_info=True)
+
+
+
+def stats_command(update: Update, context: CallbackContext):
+    # Ограничение доступа только для вашего Telegram ID
+    if update.effective_user.id != 1250098712:
+        logger.info(f"Пользователь {update.effective_user.id} попытался использовать /stats, но доступ запрещён")
+        update.message.reply_text(
+            "❌ Доступ к команде /stats ограничен.",
+            reply_markup=MAIN_MENU
+        )
+        return
+    logger.info(f"Пользователь ID {update.effective_user.id} вызвал команду /stats")
+    # Вызов функции отправки статистики
+    send_usage_stats(context)
+    update.message.reply_text(
+        "📊 Статистика отправлена!",
+        reply_markup=MAIN_MENU
+    )
+
 # Обработка нажатия на кнопку удаления ответа
 @restrict_access
 def delete_answer(update: Update, context: CallbackContext):
@@ -1897,6 +2059,14 @@ def delete_answer(update: Update, context: CallbackContext):
         context.user_data['answer_message_ids'] = []
         context.user_data['current_question_id'] = None
         logger.info(f"Пользователь {user_display} успешно удалил {deleted_count} сообщений")
+        # Запись действия с никнеймом
+        context.bot_data['user_actions'].append({
+            'user_id': update.effective_user.id,
+            'username': update.effective_user.username or f"ID {update.effective_user.id}",
+            'action': 'delete_answer',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'details': f"Пользователь удалил {deleted_count} сообщений"
+        })
         context.user_data['conversation_state'] = 'DELETE_ANSWER'
         context.user_data['conversation_active'] = False
         return ConversationHandler.END
