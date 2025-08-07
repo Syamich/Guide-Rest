@@ -50,7 +50,6 @@ TEMPLATE_EDIT_QUESTION, TEMPLATE_EDIT_FIELD, TEMPLATE_EDIT_VALUE = range(9, 12)
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📖 Справочник"), KeyboardButton("📋 Шаблоны ответов")],
-        [KeyboardButton("📕 223-ФЗ"), KeyboardButton("📗 44-ФЗ")],
         [KeyboardButton("➕ Добавить пункт"), KeyboardButton("✏️ Редактировать пункт")]
     ],
     resize_keyboard=True,
@@ -2158,8 +2157,8 @@ def main():
     dp.add_handler(MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), open_templates))
     dp.add_handler(MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point))
     dp.add_handler(MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point))
-    dp.add_handler(MessageHandler(Filters.regex(r'^📕 223-ФЗ$'), open_fz223_guide))
-    dp.add_handler(MessageHandler(Filters.regex(r'^📗 44-ФЗ$'), open_fz44_guide))
+    #dp.add_handler(MessageHandler(Filters.regex(r'^📕 223-ФЗ$'), open_fz223_guide))
+    #dp.add_handler(MessageHandler(Filters.regex(r'^📗 44-ФЗ$'), open_fz44_guide))
     dp.add_handler(CallbackQueryHandler(handle_pagination, pattern=r'^(guide|template)_page_\d+$'))
     dp.add_handler(CallbackQueryHandler(show_answer, pattern=r'^(guide|template)_question_\d+$'))
     dp.add_handler(CallbackQueryHandler(handle_template_action, pattern='^(add_template|edit_template|cancel_template)$'))
