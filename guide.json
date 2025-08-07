@@ -175,6 +175,11 @@
         "AgACAgIAAxkBAAIV4miQo45yG0JrlVyMbr4IAwx8IG9RAAJx9zEbSgKBSK0-SmN7gWd1AQADAgADeQADNgQ",
         "AgACAgIAAxkBAAIWBWiQpQLLUViXVdtPyT2AeAMYEaA7AAJ99zEbSgKBSE2dqAAB8-tFKQEAAwIAA3kAAzYE"
       ]
+    },
+    {
+      "id": 30,
+      "question": "Как добавить перечень ТРУ для СМСП?",
+      "answer": "Чтобы добавить перечень ТРУ для СМСП нужно:\n1. Зайти в ЕИС\n2. Зайти во вкладку \"Перечень товаров, работ и услуг для субъектов малого и среднего предпринимательства\"\n3. Нажать \"Добавить перечень ТРУ\"\n4. Добавить все необходимые коды ОКПД2\n5. Прикрепить печатную версию перечня\n6. Сохранить."
     }
   ]
 }

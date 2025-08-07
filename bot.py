@@ -50,6 +50,7 @@ TEMPLATE_EDIT_QUESTION, TEMPLATE_EDIT_FIELD, TEMPLATE_EDIT_VALUE = range(9, 12)
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📖 Справочник"), KeyboardButton("📋 Шаблоны ответов")],
+        [KeyboardButton("📕 223-ФЗ"), KeyboardButton("📗 44-ФЗ")],
         [KeyboardButton("➕ Добавить пункт"), KeyboardButton("✏️ Редактировать пункт")]
     ],
     resize_keyboard=True,
@@ -73,6 +74,16 @@ def load_guide():
 
 def load_templates():
     return load_data('template')
+
+def load_fz_texts(fz_type: str):
+    file_name = f'fz{fz_type}_text.json'
+    try:
+        with open(file_name, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data.get(f'fz{fz_type}_text', '')
+    except FileNotFoundError:
+        logger.warning(f"{file_name} не найден, возвращается пустой текст")
+        return ''
 
 # Чтение user_id из переменной окружения
 def load_users():
@@ -259,6 +270,90 @@ def open_guide(update: Update, context: CallbackContext):
     display_guide_page(update, context, guide, page, 'guide')
     return ConversationHandler.END
 
+@restrict_access
+def open_fz223_guide(update: Update, context: CallbackContext):
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} открыл справочник 223-ФЗ")
+    context.bot_data['user_actions'].append({
+        'user_id': update.effective_user.id,
+        'username': update.effective_user.username or f"ID {update.effective_user.id}",
+        'action': 'open_fz223_guide',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': 'Пользователь открыл справочник 223-ФЗ'
+    })
+    try:
+        update.message.delete()
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение пользователя {user_display}: {e}")
+    context.job_queue.run_once(
+        lambda ctx: clear_chat(ctx, update.effective_chat.id, update.effective_message.message_id, user_display),
+        0,
+        context=None
+    )
+    context.user_data.clear()
+    context.user_data['conversation_state'] = 'OPEN_FZ223_GUIDE'
+    context.user_data['conversation_active'] = False
+    fz_text = load_fz_texts('223')
+    if not fz_text:
+        update.message.reply_text(
+            "📕 Справочник 223-ФЗ пуст или не найден.",
+            reply_markup=MAIN_MENU
+        )
+        return ConversationHandler.END
+    message = update.message.reply_text(
+        fz_text,
+        reply_markup=MAIN_MENU,
+        quote=False
+    )
+    context.job_queue.run_once(
+        lambda ctx: clear_chat(ctx, update.effective_chat.id, message.message_id, user_display),
+        14400,
+        context=None
+    )
+    return ConversationHandler.END
+
+@restrict_access
+def open_fz44_guide(update: Update, context: CallbackContext):
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} открыл справочник 44-ФЗ")
+    context.bot_data['user_actions'].append({
+        'user_id': update.effective_user.id,
+        'username': update.effective_user.username or f"ID {update.effective_user.id}",
+        'action': 'open_fz44_guide',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': 'Пользователь открыл справочник 44-ФЗ'
+    })
+    try:
+        update.message.delete()
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение пользователя {user_display}: {e}")
+    context.job_queue.run_once(
+        lambda ctx: clear_chat(ctx, update.effective_chat.id, update.effective_message.message_id, user_display),
+        0,
+        context=None
+    )
+    context.user_data.clear()
+    context.user_data['conversation_state'] = 'OPEN_FZ44_GUIDE'
+    context.user_data['conversation_active'] = False
+    fz_text = load_fz_texts('44')
+    if not fz_text:
+        update.message.reply_text(
+            "📗 Справочник 44-ФЗ пуст или не найден.",
+            reply_markup=MAIN_MENU
+        )
+        return ConversationHandler.END
+    message = update.message.reply_text(
+        fz_text,
+        reply_markup=MAIN_MENU,
+        quote=False
+    )
+    context.job_queue.run_once(
+        lambda ctx: clear_chat(ctx, update.effective_chat.id, message.message_id, user_display),
+        14400,
+        context=None
+    )
+    return ConversationHandler.END
+
 # Открытие шаблонов
 @restrict_access
 def open_templates(update: Update, context: CallbackContext):
@@ -336,22 +431,40 @@ def display_guide_page(update: Update, context: CallbackContext, data, page, dat
 
         inline_reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"📖 Справочник (страница {page + 1}/{total_pages}):"
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
 
         if update.message:
-            update.message.reply_text(
+            message = update.message.reply_text(
                 text,
-                reply_markup=inline_reply_markup,  # Инлайн-кнопки
+                reply_markup=inline_reply_markup,
                 reply_to_message_id=None
             )
+            # Планируем автоудаление списка через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, message.message_id, user_display),
+                14400,
+                context=None
+            )
             # Отправляем сообщение с главным меню
-            update.message.reply_text("Выберите нужный пункт", reply_markup=MAIN_MENU)
+            menu_message = update.message.reply_text("Выберите нужный пункт", reply_markup=MAIN_MENU)
+            # Планируем автоудаление сообщения "Выберите нужный пункт" через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, menu_message.message_id, user_display),
+                14400,
+                context=None
+            )
         elif update.callback_query:
             update.callback_query.message.edit_text(
                 text,
-                reply_markup=inline_reply_markup  # Только инлайн-кнопки при пагинации
+                reply_markup=inline_reply_markup
+            )
+            # Планируем автоудаление отредактированного сообщения через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, update.callback_query.message.message_id, user_display),
+                14400,
+                context=None
             )
 
-        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
         logger.info(f"Пользователь {user_display} просмотрел страницу справочника {page + 1}")
         context.user_data['conversation_state'] = f'{data_type.upper()}_PAGE'
         context.user_data['conversation_active'] = False
@@ -411,22 +524,40 @@ def display_template_page(update: Update, context: CallbackContext, data, page):
 
         inline_reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"📋 Шаблоны ответов (страница {page + 1}/{total_pages}):"
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
 
         if update.message:
-            update.message.reply_text(
+            message = update.message.reply_text(
                 text,
-                reply_markup=inline_reply_markup,  # Инлайн-кнопки
+                reply_markup=inline_reply_markup,
                 reply_to_message_id=None
             )
+            # Планируем автоудаление списка через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, message.message_id, user_display),
+                14400,
+                context=None
+            )
             # Отправляем сообщение с главным меню
-            update.message.reply_text("Выберите нужный пункт", reply_markup=MAIN_MENU)
+            menu_message = update.message.reply_text("Выберите нужный пункт", reply_markup=MAIN_MENU)
+            # Планируем автоудаление сообщения "Выберите нужный пункт" через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, menu_message.message_id, user_display),
+                14400,
+                context=None
+            )
         elif update.callback_query:
             update.callback_query.message.edit_text(
                 text,
-                reply_markup=inline_reply_markup  # Только инлайн-кнопки при пагинации
+                reply_markup=inline_reply_markup
+            )
+            # Планируем автоудаление отредактированного сообщения через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, update.callback_query.message.message_id, user_display),
+                14400,
+                context=None
             )
 
-        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
         logger.info(f"Пользователь {user_display} просмотрел страницу шаблонов {page + 1}")
         context.user_data['conversation_state'] = 'TEMPLATE_PAGE'
         context.user_data['conversation_active'] = False
@@ -1428,15 +1559,39 @@ def display_guide_edit_page(update: Update, context: CallbackContext, data, page
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"✏️ Выберите вопрос для редактирования (страница {page + 1}/{total_pages}):"
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+
         if update.message:
-            update.message.reply_text(text, reply_markup=reply_markup, quote=False)
+            message = update.message.reply_text(text, reply_markup=reply_markup, quote=False)
+            # Планируем автоудаление списка через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, message.message_id, user_display),
+                14400,
+                context=None
+            )
+            # Отправляем сообщение с главным меню
+            menu_message = update.message.reply_text("Выберите нужный пункт", reply_markup=MAIN_MENU)
+            # Планируем автоудаление сообщения "Выберите нужный пункт" через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, menu_message.message_id, user_display),
+                14400,
+                context=None
+            )
         elif update.callback_query:
             update.callback_query.message.edit_text(text, reply_markup=reply_markup)
-        logger.info(f"Пользователь {update.effective_user.id} просмотрел страницу редактирования справочника {page + 1}")
+            # Планируем автоудаление отредактированного сообщения через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, update.callback_query.message.message_id, user_display),
+                14400,
+                context=None
+            )
+
+        logger.info(f"Пользователь {user_display} просмотрел страницу редактирования справочника {page + 1}")
         context.user_data['conversation_state'] = 'EDIT_GUIDE_PAGE'
         return GUIDE_EDIT_QUESTION
     except Exception as e:
-        logger.error(f"Ошибка в display_guide_edit_page для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.error(f"Ошибка в display_guide_edit_page для пользователя {user_display}: {str(e)}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
@@ -1489,15 +1644,39 @@ def display_template_edit_page(update: Update, context: CallbackContext, data, p
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"✏️ Выберите шаблон для редактирования (страница {page + 1}/{total_pages}):"
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+
         if update.message:
-            update.message.reply_text(text, reply_markup=reply_markup, quote=False)
+            message = update.message.reply_text(text, reply_markup=reply_markup, quote=False)
+            # Планируем автоудаление списка через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, message.message_id, user_display),
+                14400,
+                context=None
+            )
+            # Отправляем сообщение с главным меню
+            menu_message = update.message.reply_text("Выберите нужный пункт", reply_markup=MAIN_MENU)
+            # Планируем автоудаление сообщения "Выберите нужный пункт" через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, menu_message.message_id, user_display),
+                14400,
+                context=None
+            )
         elif update.callback_query:
             update.callback_query.message.edit_text(text, reply_markup=reply_markup)
-        logger.info(f"Пользователь {update.effective_user.id} просмотрел страницу редактирования шаблонов {page + 1}")
+            # Планируем автоудаление отредактированного сообщения через 4 часа
+            context.job_queue.run_once(
+                lambda ctx: clear_chat(ctx, update.effective_chat.id, update.callback_query.message.message_id, user_display),
+                14400,
+                context=None
+            )
+
+        logger.info(f"Пользователь {user_display} просмотрел страницу редактирования шаблонов {page + 1}")
         context.user_data['conversation_state'] = 'EDIT_TEMPLATE_PAGE'
         return TEMPLATE_EDIT_QUESTION
     except Exception as e:
-        logger.error(f"Ошибка в display_template_edit_page для пользователя {update.effective_user.id}: {e}", exc_info=True)
+        user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+        logger.error(f"Ошибка в display_template_edit_page для пользователя {user_display}: {str(e)}", exc_info=True)
         context.user_data.clear()
         context.user_data['conversation_state'] = 'ERROR'
         context.user_data['conversation_active'] = False
@@ -1867,7 +2046,6 @@ def main():
     from telegram import BotCommand
     commands = [
         BotCommand("start", "Запустить бота"),
-        BotCommand("cancel", "Отменить текущую операцию"),
         BotCommand("stats", "Показать статистику (для администратора)"),
         BotCommand("instruction", "Показать инструкцию по использованию бота")
     ]
@@ -1975,11 +2153,13 @@ def main():
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("cancel", cancel))
     dp.add_handler(CommandHandler("stats", stats_command))
-    dp.add_handler(CommandHandler("instruction", show_instruction))  # НОВОЕ: Обработчик для команды /instruction
+    dp.add_handler(CommandHandler("instruction", show_instruction))
     dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
     dp.add_handler(MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), open_templates))
     dp.add_handler(MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point))
     dp.add_handler(MessageHandler(Filters.regex(r'^✏️ Редактировать пункт$'), edit_point))
+    dp.add_handler(MessageHandler(Filters.regex(r'^📕 223-ФЗ$'), open_fz223_guide))
+    dp.add_handler(MessageHandler(Filters.regex(r'^📗 44-ФЗ$'), open_fz44_guide))
     dp.add_handler(CallbackQueryHandler(handle_pagination, pattern=r'^(guide|template)_page_\d+$'))
     dp.add_handler(CallbackQueryHandler(show_answer, pattern=r'^(guide|template)_question_\d+$'))
     dp.add_handler(CallbackQueryHandler(handle_template_action, pattern='^(add_template|edit_template|cancel_template)$'))
