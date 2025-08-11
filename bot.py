@@ -4,6 +4,8 @@ import os
 import subprocess
 import logging
 import pymorphy3
+import time
+import urllib3
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
@@ -31,6 +33,15 @@ logger = logging.getLogger(__name__)
 # Загрузка .env
 load_dotenv()
 logger.info("Загружен файл .env")
+
+DADATA_TOKEN = os.getenv("DADATA_TOKEN")
+
+# in-memory cache для /inn (чтобы избежать NameError)
+INN_CACHE = {}
+INN_TTL = 24 * 3600  # 1 день
+
+# состояние ConversationHandler для ввода ИНН
+STATE_INN = 1
 
 # Проверка BOT_TOKEN
 if not os.getenv("BOT_TOKEN"):
@@ -1984,9 +1995,13 @@ def show_instruction(update: Update, context: CallbackContext):
         "   - Выберите вопрос для редактирования.\n"
         "   - Изменяйте вопрос, ответ, фото или удаляйте пункт.\n"
         "   - Следуйте подсказкам и завершайте редактирование или отменяйте через /cancel.\n\n"
-        "5. **📜 Инструкция**:\n"
+        "5. **🔍 Поиск по ИНН**:\n"
+        "   - Используйте команду /inn, чтобы найти организацию по ИНН.\n"
+        "   - Введите ИНН, и бот покажет название, адрес, директора, статус и другие данные.\n"
+        "   - Используйте /cancel для отмены поиска.\n\n"
+        "6. **📜 Инструкция**:\n"
         "   - Вы здесь! Эта команда показывает, как пользоваться ботом.\n\n"
-        "6. **Дополнительно**:\n"
+        "7. **Дополнительно**:\n"
         "   - Используйте /cancel в любой момент, чтобы отменить текущую операцию.\n"
         "   - Для поиска просто введите ключевое слово в чат.\n"
         "   - Если возникла ошибка, бот уведомит вас, и вы сможете начать заново.\n\n"
@@ -2012,6 +2027,230 @@ def show_instruction(update: Update, context: CallbackContext):
     context.user_data['conversation_state'] = 'SHOW_INSTRUCTION'
     context.user_data['conversation_active'] = False
     return ConversationHandler.END
+
+# --- Блок для /inn: валидация, запрос к DaData, кэш и Conversation handlers ---
+
+def validate_inn(inn: str) -> bool:
+    """Проверка ИНН (10 или 12 цифр) с контрольной суммой."""
+    inn = (inn or "").strip()
+    if not inn.isdigit() or len(inn) not in (10, 12):
+        return False
+
+    def checksum(digits, coef):
+        s = sum(int(d) * c for d, c in zip(digits, coef))
+        return str((s % 11) % 10)
+
+    if len(inn) == 10:
+        coef = [2, 4, 10, 3, 5, 9, 4, 6, 8]
+        return checksum(inn[:9], coef) == inn[9]
+    else:  # 12
+        coef1 = [7, 2, 4, 10, 3, 5, 9, 4, 6, 8]
+        coef2 = [3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8]
+        return checksum(inn[:10], coef1) == inn[10] and checksum(inn[:11], coef2) == inn[11]
+
+
+def fetch_party_by_inn_sync(inn: str, token: str):
+    """
+    Запрос к DaData с расширенной информацией.
+    Возвращает dict с данными или None.
+    """
+    url = "https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/party"
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Token {token}"
+    }
+    body = {"query": inn}
+
+    from urllib3.util.retry import Retry
+    from urllib3.exceptions import NewConnectionError, MaxRetryError, SSLError
+
+    retry = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        raise_on_status=False,
+    )
+
+    proxy = os.getenv('https_proxy') or os.getenv('HTTPS_PROXY') or os.getenv('http_proxy') or os.getenv('HTTP_PROXY')
+    if proxy:
+        logger.info(f"DaData: using proxy {proxy}")
+        http = urllib3.ProxyManager(proxy_url=proxy, retries=retry)
+    else:
+        http = urllib3.PoolManager(retries=retry)
+
+    try:
+        resp = http.request(
+            "POST",
+            url,
+            body=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            timeout=urllib3.Timeout(connect=3.0, read=6.0)
+        )
+    except (NewConnectionError, MaxRetryError, SSLError, Exception) as e:
+        logger.error(f"Ошибка запроса к Dadata для INN={inn}: {e}", exc_info=True)
+        return None
+
+    if resp.status != 200:
+        logger.warning(f"Dadata returned status {resp.status} for INN {inn}.")
+        return None
+
+    try:
+        data = json.loads(resp.data.decode("utf-8"))
+    except Exception as e:
+        logger.error(f"Ошибка парсинга ответа Dadata для INN={inn}: {e}", exc_info=True)
+        return None
+
+    if not data.get("suggestions"):
+        return None
+
+    party = data["suggestions"][0].get("data", {})
+
+    # Директор
+    director = (party.get("management") or {}).get("name")
+
+    # Учредители
+    founders = []
+    for founder in (party.get("founders") or []):
+        if isinstance(founder, dict) and "name" in founder:
+            founders.append(founder["name"])
+
+    # Телефон
+    phone = None
+    if "phones" in party and party["phones"]:
+        phone = party["phones"][0].get("value")
+
+    # Вид деятельности
+    activity = party.get("okved_type") or party.get("okved") or None
+
+    return {
+        "name": party.get("name", {}).get("full_with_opf") or party.get("name", {}).get("short"),
+        "director": director,
+        "founders": founders,
+        "phone": phone,
+        "inn": party.get("inn"),
+        "ogrn": party.get("ogrn"),
+        "kpp": party.get("kpp"),
+        "okpo": party.get("okpo"),
+        "okato": party.get("okato"),
+        "oktmo": party.get("oktmo"),
+        "okfs": party.get("okfs"),
+        "okogu": party.get("okogu"),
+        "okopf": party.get("okopf"),
+        "address": (party.get("address") or {}).get("value"),
+        "status": (party.get("state") or {}).get("status"),
+        "okved": activity,
+        "rnps": "Неизвестно",  # тут будет проверка РНП (заглушка)
+    }
+
+
+
+def get_inn_cached(inn: str):
+    now = time.time()
+    entry = INN_CACHE.get(inn)
+    if not entry:
+        return None
+    if now - entry["ts"] > INN_TTL:
+        INN_CACHE.pop(inn, None)
+        return None
+    return entry["payload"]
+
+
+def set_inn_cache(inn: str, payload: dict):
+    INN_CACHE[inn] = {"payload": payload, "ts": time.time()}
+
+
+def format_org_text(data: dict) -> str:
+    """Форматирование вывода — компактный текст."""
+    lines = []
+    lines.append(data.get("name") or "—")
+    lines.append(f"Статус: {data.get('status','—')}")
+    lines.append(f"ИНН: {data.get('inn','—')}")
+    lines.append(f"ОГРН: {data.get('ogrn','—')}")
+    lines.append(f"КПП: {data.get('kpp','—')}")
+    lines.append(f"ОКПО: {data.get('okpo','—')}")
+    lines.append(f"ОКАТО: {data.get('okato','—')}")
+    lines.append(f"ОКТМО: {data.get('oktmo','—')}")
+    lines.append(f"ОКОПФ/ОПФ: {data.get('okopf','—')}")
+    lines.append(f"ОКФС: {data.get('okfs','—')}")
+    lines.append(f"ОКОГУ: {data.get('okogu','—')}")
+    if data.get("okved"):
+        lines.append(f"ОКВЭД: {data.get('okved')}")
+    lines.append(f"Адрес: {data.get('address','—')}")
+    if data.get("management"):
+        lines.append(f"Руководитель: {data.get('management')}")
+    return "\n".join(lines)
+
+
+# ConversationHandler handlers:
+def start_inn(update: Update, context: CallbackContext):
+    update.message.reply_text("Введите ИНН организации (только цифры). Для отмены отправьте /cancel")
+    return STATE_INN
+
+
+def receive_inn(update: Update, context: CallbackContext):
+    inn_text = (update.message.text or "").strip()
+    if not validate_inn(inn_text):
+        update.message.reply_text("Некорректный ИНН. Введите 10 или 12 цифр (или /cancel).")
+        return STATE_INN
+
+    cached = get_inn_cached(inn_text)
+    if cached:
+        update.message.reply_text(format_org_text(cached))
+        return ConversationHandler.END
+
+    token = DADATA_TOKEN
+    if not token:
+        update.message.reply_text("DADATA_TOKEN не настроен. Обратитесь к администратору.")
+        return ConversationHandler.END
+
+    update.message.reply_text("Ищу организацию по ИНН, подождите…")
+    data = fetch_party_by_inn_sync(inn_text, token)
+
+    if data:
+        msg_parts = []
+        msg_parts.append(f"*{data['name']}*")
+        msg_parts.append("")  # пустая строка
+
+        if data.get("director"):
+            msg_parts.append(f"Директор: {data['director']}")
+        if data.get("founders"):
+            msg_parts.append("Учредители: " + ", ".join(data["founders"]))
+        if data.get("phone"):
+            msg_parts.append(f"Телефон: {data['phone']}")
+
+        msg_parts.append("")  # пустая строка
+
+        msg_parts.append(f"ИНН: {data['inn']}")
+        msg_parts.append(f"КПП: {data['kpp']}")
+        msg_parts.append(f"ОГРН: {data['ogrn']}")
+        msg_parts.append(f"ОКПО: {data['okpo']}")
+        msg_parts.append(f"ОКАТО: {data['okato']}")
+        msg_parts.append(f"ОКТМО: {data['oktmo']}")
+        msg_parts.append(f"ОКФС: {data['okfs']}")
+        msg_parts.append(f"ОКОГУ: {data['okogu']}")
+        msg_parts.append(f"ОКОПФ: {data['okopf']}")
+        msg_parts.append(f"Адрес: {data['address']}")
+        msg_parts.append(f"Статус: {data['status']}")
+        msg_parts.append(f"Вид деятельности: {data['okved']}")
+        msg_parts.append(f"В реестре недобросовестных поставщиков: {data['rnps']}")
+
+        update.message.reply_text("\n".join(msg_parts), parse_mode="Markdown")
+
+        set_inn_cache(inn_text, data)
+        return ConversationHandler.END
+    else:
+        update.message.reply_text("Организация не найдена или сервис недоступен.")
+        return ConversationHandler.END
+
+
+def cancel_inn(update: Update, context: CallbackContext):
+    update.message.reply_text("Поиск по ИНН отменён.")
+    return ConversationHandler.END
+
+# --- конец блока /inn ---
+
+
 
 #Запуск бота
 def main():
@@ -2046,7 +2285,8 @@ def main():
     commands = [
         BotCommand("start", "Запустить бота"),
         BotCommand("stats", "Показать статистику (для администратора)"),
-        BotCommand("instruction", "Показать инструкцию по использованию бота")
+        BotCommand("instruction", "Показать инструкцию по использованию бота"),
+        BotCommand("inn", "Поиск организации по ИНН")
     ]
     updater.bot.set_my_commands(commands)
     logger.info("Команды бота настроены для отображения в меню")
@@ -2148,11 +2388,19 @@ def main():
     dp.add_handler(template_add_conv)
     dp.add_handler(guide_edit_conv)
     dp.add_handler(template_edit_conv)
-
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("cancel", cancel))
     dp.add_handler(CommandHandler("stats", stats_command))
     dp.add_handler(CommandHandler("instruction", show_instruction))
+
+    conv_inn = ConversationHandler(
+    entry_points=[CommandHandler("inn", start_inn)],
+    states={STATE_INN: [MessageHandler(Filters.text & ~Filters.command, receive_inn)]},
+    fallbacks=[CommandHandler("cancel", cancel_inn)],
+    allow_reentry=False,
+    )
+    dp.add_handler(conv_inn)
+
     dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
     dp.add_handler(MessageHandler(Filters.regex(r'^📋 Шаблоны ответов$'), open_templates))
     dp.add_handler(MessageHandler(Filters.regex(r'^➕ Добавить пункт$'), add_point))
