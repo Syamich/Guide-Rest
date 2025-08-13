@@ -2245,9 +2245,24 @@ def receive_inn(update: Update, context: CallbackContext):
 
 
 def cancel_inn(update: Update, context: CallbackContext):
+    context.user_data.clear()
+    context.user_data['conversation_active'] = False
     update.message.reply_text("Поиск по ИНН отменён.")
     return ConversationHandler.END
 
+@restrict_access
+def handle_menu_in_inn_state(update: Update, context: CallbackContext):
+       text = update.message.text
+       cancel_inn(update, context)  # Отменяем состояние /inn
+       if text == "📖 Справочник":
+           open_guide(update, context)
+       elif text == "📋 Шаблоны ответов":
+           open_templates(update, context)
+       elif text == "➕ Добавить пункт":
+           add_point(update, context)
+       elif text == "✏️ Редактировать пункт":
+           edit_point(update, context)
+       return ConversationHandler.END
 # --- конец блока /inn ---
 
 
@@ -2394,11 +2409,17 @@ def main():
     dp.add_handler(CommandHandler("instruction", show_instruction))
 
     conv_inn = ConversationHandler(
-    entry_points=[CommandHandler("inn", start_inn)],
-    states={STATE_INN: [MessageHandler(Filters.text & ~Filters.command, receive_inn)]},
-    fallbacks=[CommandHandler("cancel", cancel_inn)],
-    allow_reentry=False,
-    )
+       entry_points=[CommandHandler("inn", start_inn)],
+       states={STATE_INN: [
+           MessageHandler(Filters.text & ~Filters.command & ~Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'), receive_inn),
+           MessageHandler(Filters.regex(r'^(📖 Справочник|📋 Шаблоны ответов|➕ Добавить пункт|✏️ Редактировать пункт)$'), handle_menu_in_inn_state)
+       ]},
+       fallbacks=[
+           CommandHandler("cancel", cancel_inn),
+           CommandHandler("start", start)
+       ],
+       allow_reentry=False,
+   )
     dp.add_handler(conv_inn)
 
     dp.add_handler(MessageHandler(Filters.regex(r'^📖 Справочник$'), open_guide))
