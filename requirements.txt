@@ -4,3 +4,4 @@ apscheduler==3.6.3
 setuptools<81
 pymorphy3==2.0.2
 urllib3==1.26.16
+requests==2.28.1
