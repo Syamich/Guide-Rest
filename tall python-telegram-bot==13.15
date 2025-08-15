@@ -1,0 +1,60 @@
+[33mcommit b98f14bbd024e2f84558b67dad4f0be9c2a6c9e2[m
+Author: Your Name <your_email@example.com>
+Date:   Tue Aug 5 13:59:06 2025 +0000
+
+    Обновление JSON файлов через бот
+
+[1mdiff --git a/requirements.txt b/requirements.txt[m
+[1mindex eb5fe60..f05449c 100644[m
+[1m--- a/requirements.txt[m
+[1m+++ b/requirements.txt[m
+[36m@@ -1,2 +1,6 @@[m
+ python-telegram-bot==20.7[m
+ python-dotenv==1.0.1[m
+[32m+[m[32mapscheduler==3.10.4[m
+[32m+[m[32msetuptools<81[m
+[32m+[m[32mpymorphy3==2.0.2[m
+[32m+[m[32murllib3==2.2.2[m
+\ No newline at end of file[m
+
+[33mcommit 1babd6824b5fdea44d63798512fcf73e9a23bc18[m
+Author: Your Name <your_email@example.com>
+Date:   Fri Jul 4 11:10:40 2025 +0000
+
+    Commit unstaged changes before pull
+
+[1mdiff --git a/requirements.txt b/requirements.txt[m
+[1mindex 7d5efd5..eb5fe60 100644[m
+[1m--- a/requirements.txt[m
+[1m+++ b/requirements.txt[m
+[36m@@ -1 +1,2 @@[m
+ python-telegram-bot==20.7[m
+[32m+[m[32mpython-dotenv==1.0.1[m
+
+[33mcommit ce14bdb0553ae90f780fcab6b5445b0659018dd4[m
+Author: Syamich <47979615+Syamich@users.noreply.github.com>
+Date:   Thu Jul 3 20:46:07 2025 +0300
+
+    Update requirements.txt
+
+[1mdiff --git a/requirements.txt b/requirements.txt[m
+[1mindex 8b13789..7d5efd5 100644[m
+[1m--- a/requirements.txt[m
+[1m+++ b/requirements.txt[m
+[36m@@ -1 +1 @@[m
+[31m-[m
+[32m+[m[32mpython-telegram-bot==20.7[m
+
+[33mcommit 02abe3ec3d88e9e7bbd197845994b629c2436bc6[m
+Author: Syamich <47979615+Syamich@users.noreply.github.com>
+Date:   Thu Jul 3 18:22:10 2025 +0500
+
+    Create requirements.txt
+
+[1mdiff --git a/requirements.txt b/requirements.txt[m
+[1mnew file mode 100644[m
+[1mindex 0000000..8b13789[m
+[1m--- /dev/null[m
+[1m+++ b/requirements.txt[m
+[36m@@ -0,0 +1 @@[m
+[32m+[m
