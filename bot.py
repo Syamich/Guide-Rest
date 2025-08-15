@@ -20,6 +20,8 @@ from telegram.ext import (
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
+import xml.etree.ElementTree as ET
+import requests
 
 # Максимальная длина текста кнопки (в символах) для выравнивания
 MAX_BUTTON_TEXT_LENGTH = 100
@@ -27,7 +29,11 @@ MAX_MEDIA_PER_ALBUM = 10  # Лимит Telegram API для sendMediaGroup
 
 
 # Настройка логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    filename='bot.log'  # Логи в bot.log
+)
 logger = logging.getLogger(__name__)
 
 # Загрузка .env
@@ -56,6 +62,7 @@ GUIDE_QUESTION, GUIDE_ANSWER, GUIDE_ANSWER_PHOTOS = range(3)
 GUIDE_EDIT_QUESTION, GUIDE_EDIT_FIELD, GUIDE_EDIT_VALUE = range(3, 6)
 TEMPLATE_QUESTION, TEMPLATE_ANSWER, TEMPLATE_ANSWER_PHOTOS = range(6, 9)
 TEMPLATE_EDIT_QUESTION, TEMPLATE_EDIT_FIELD, TEMPLATE_EDIT_VALUE = range(9, 12)
+STATE_ZAKUPKA = 13
 
 # Постоянное клавиатурное меню
 MAIN_MENU = ReplyKeyboardMarkup(
@@ -1946,6 +1953,85 @@ def receive_edit_value(update: Update, context: CallbackContext):
         )
         return ConversationHandler.END
 
+@restrict_access
+def start_zakupka(update: Update, context: CallbackContext):
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} начал поиск закупки по реестровому номеру")
+    context.bot_data['user_actions'].append({
+        'user_id': update.effective_user.id,
+        'username': update.effective_user.username or f"ID {update.effective_user.id}",
+        'action': 'start_zakupka',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': 'Пользователь начал поиск закупки'
+    })
+    update.message.reply_text(
+        "Введите реестровый номер закупки (например, 31705311113):\n(Напишите /cancel для отмены)",
+        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+    )
+    return STATE_ZAKUPKA
+
+@restrict_access
+def receive_zakupka(update: Update, context: CallbackContext):
+    reg_number = update.message.text.strip()
+    user_display = context.user_data.get('user_display', f"ID {update.effective_user.id}")
+    logger.info(f"Пользователь {user_display} ввел реестровый номер: {reg_number}")
+    context.bot_data['user_actions'].append({
+        'user_id': update.effective_user.id,
+        'username': update.effective_user.username or f"ID {update.effective_user.id}",
+        'action': 'receive_zakupka',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': f"Поиск закупки по номеру {reg_number}"
+    })
+
+    url = f"https://zakupki.gov.ru/epz/order/notice/printForm/viewXml?regNumber={reg_number}"
+    proxy = os.getenv('HTTPS_PROXY')
+    proxies = {'https': proxy} if proxy else None
+    try:
+        response = requests.get(url, proxies=proxies, verify=False, timeout=10)
+        response.raise_for_status()  # Вызывает исключение для статусов != 200
+        xml_data = response.text
+        root = ET.fromstring(xml_data)
+
+        ns = {
+            'ns2': 'http://zakupki.gov.ru/oos/printform/1',
+            '': 'http://zakupki.gov.ru/oos/types/1'
+        }
+
+        # Извлечение данных (без изменений)
+        reg_num = root.find(".//purchaseNumber", ns).text if root.find(".//purchaseNumber", ns) is not None else "Не найдено"
+        customer = root.find(".//responsibleOrg/fullName", ns).text if root.find(".//responsibleOrg/fullName", ns) is not None else "Не найдено"
+        max_price = root.find(".//maxPrice", ns).text if root.find(".//maxPrice", ns) is not None else "Не найдено"
+        method = root.find(".//purchaseCodeName", ns).text if root.find(".//purchaseCodeName", ns) is not None else "Не найдено"
+        start_submit = root.find(".//collecting/startDate", ns).text if root.find(".//collecting/startDate", ns) is not None else "Не найдено"
+        end_submit = root.find(".//collecting/endDate", ns).text if root.find(".//collecting/endDate", ns) is not None else "Не найдено"
+        review = root.find(".//scoring/date", ns).text if root.find(".//scoring/date", ns) is not None else "Не найдено"
+        summing = root.find(".//summingUp/date", ns).text if root.find(".//summingUp/date", ns) is not None else "Не найдено"
+
+        # Для аукциона
+        first_parts = root.find(".//firstPartsDate", ns).text if root.find(".//firstPartsDate", ns) is not None else None
+        second_parts = root.find(".//secondPartsDate", ns).text if root.find(".//secondPartsDate", ns) is not None else None
+
+        text = f"Реестровый номер: {reg_num}\n" \
+               f"Заказчик: {customer}\n" \
+               f"Начальная (максимальная) цена договора (лота): {max_price}\n" \
+               f"Способ закупки: {method}\n" \
+               f"Этапы проведения лота:\n" \
+               f"Начало подачи заявок: {start_submit}\n" \
+               f"Окончание подачи заявок: {end_submit}\n" \
+               f"Рассмотрение заявок: {review}\n" \
+               f"Подведение итогов: {summing}"
+
+        if "аукцион" in method.lower() and first_parts:
+            text += f"\nРассмотрение первых частей заявок: {first_parts}\n" \
+                    f"Рассмотрение вторых частей заявок: {second_parts or 'Не указано'}"
+
+        update.message.reply_text(text, reply_markup=MAIN_MENU)
+    except Exception as e:
+        logger.error(f"Ошибка парсинга закупки {reg_number} для {user_display}: {e}")
+        update.message.reply_text("❌ Закупка не найдена или произошла ошибка. Попробуйте другой номер.", reply_markup=MAIN_MENU)
+
+    return ConversationHandler.END
+
 # Обработчик неподдерживаемых сообщений
 @restrict_access
 def handle_invalid_input(update: Update, context: CallbackContext):
@@ -2301,7 +2387,8 @@ def main():
         BotCommand("start", "Запустить бота"),
         BotCommand("stats", "Показать статистику (для администратора)"),
         BotCommand("instruction", "Показать инструкцию по использованию бота"),
-        BotCommand("inn", "Поиск организации по ИНН")
+        BotCommand("inn", "Поиск организации по ИНН"),
+        BotCommand("zakupka", "Поиск закупки по реестровому номеру")
     ]
     updater.bot.set_my_commands(commands)
     logger.info("Команды бота настроены для отображения в меню")
@@ -2399,6 +2486,20 @@ def main():
         allow_reentry=False,
     )
 
+    zakupka_conv = ConversationHandler(
+        entry_points=[CommandHandler("zakupka", start_zakupka)],
+        states={
+            STATE_ZAKUPKA: [
+                MessageHandler(Filters.text & ~Filters.command, receive_zakupka)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=False,
+    )
+
+    dp.add_handler(zakupka_conv)
     dp.add_handler(guide_add_conv)
     dp.add_handler(template_add_conv)
     dp.add_handler(guide_edit_conv)
@@ -2406,7 +2507,7 @@ def main():
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("cancel", cancel))
     dp.add_handler(CommandHandler("stats", stats_command))
-    dp.add_handler(CommandHandler("instruction", show_instruction))
+    dp.add_handler(CommandHandler("instruction", show_instruction)),
 
     conv_inn = ConversationHandler(
        entry_points=[CommandHandler("inn", start_inn)],
